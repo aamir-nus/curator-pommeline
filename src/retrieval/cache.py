@@ -53,15 +53,37 @@ class InMemoryCache:
             "sets": 0
         }
 
+    def _make_hashable(self, obj) -> str:
+        """Convert an object to a hashable string representation."""
+        try:
+            # Try simple string conversion first
+            str_obj = str(obj)
+            # If it's a simple type, return it
+            if isinstance(obj, (str, int, float, bool, type(None))):
+                return str_obj
+            # For complex objects like dicts, use json string with sorted keys
+            elif isinstance(obj, dict):
+                import json
+                return json.dumps(obj, sort_keys=True, separators=(',', ':'))
+            # For lists or tuples, convert each element
+            elif isinstance(obj, (list, tuple)):
+                return '[' + ','.join(self._make_hashable(item) for item in obj) + ']'
+            # For other types, use repr
+            else:
+                return repr(obj)
+        except Exception:
+            # Fallback to repr if anything fails
+            return repr(obj)
+
     def _generate_key(self, key_func: str, *args, **kwargs) -> str:
         """Generate a cache key from function arguments."""
         # Create a string representation of arguments
         key_parts = [key_func]
-        key_parts.extend(str(arg) for arg in args)
+        key_parts.extend(self._make_hashable(arg) for arg in args)
 
         # Sort kwargs for consistent key generation
         for k in sorted(kwargs.keys()):
-            key_parts.append(f"{k}={kwargs[k]}")
+            key_parts.append(f"{k}={self._make_hashable(kwargs[k])}")
 
         key_string = "|".join(key_parts)
 

@@ -69,11 +69,13 @@ class MetricsCollector:
         if len(self.metrics) > self.max_points:
             self.metrics = self.metrics[-self.max_points:]
 
-        # Log the metric
+        # Log the metric with explicit latency information
+        latency_info = f"{value:.1f}ms" if 'ms' in operation.lower() or operation in ['tool_retrieve', 'embeddings', 'queries_performed'] else f"{value:.3f}"
         logger.info(
-            f"Metric recorded: {operation}",
+            f"Performance: {operation} took {latency_info}",
             operation=operation,
             value=value,
+            latency_ms=latency_info,
             **metadata
         )
 
@@ -156,7 +158,9 @@ def latency_timer(collector: MetricsCollector, operation: str, **metadata):
         yield
     finally:
         latency_ms = (time.time() - start_time) * 1000
-        collector.add_metric(operation, latency_ms, **metadata)
+        # Format latency info for better logging without duplicating metadata
+        latency_info = f"{latency_ms:.1f}ms" if latency_ms >= 1 else f"{latency_ms:.2f}ms"
+        collector.add_metric(operation, latency_ms, latency_info=latency_info, **metadata)
 
 
 # Global metrics collector

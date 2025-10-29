@@ -10,7 +10,7 @@ import json
 from ..guardrails.classifier import get_guardrail_classifier, ClassificationResult, GuardrailLabel
 from ..guardrails.link_masker import get_link_masker
 from ..planner.tool_planner import get_tool_planner, ToolPlan, ToolCall, ToolType
-from ..tools.retrieve import get_retrieve_tool, RetrieveResponse, RetrievedDocument
+from ..tools.retrieve import get_retrieve_tool, RetrieveResponse
 from ..tools.search_product import get_search_product_tool, ProductSearchResponse, Product
 from ..generator.response_generator import get_response_generator, GeneratedResponse
 from ..utils.logger import get_logger
