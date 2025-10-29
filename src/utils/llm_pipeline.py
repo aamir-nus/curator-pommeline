@@ -7,7 +7,7 @@ import json
 from tqdm import tqdm
 
 from .model_configs import get_model_configs
-from src.config import get_config
+from src.config import settings
 from .logger import get_logger
 
 import sys
@@ -27,7 +27,7 @@ logger = get_logger(__name__)
 # perplexity_api_key = os.getenv("PERPLEXITY_API_KEY", None)
 
 # Get default config for project wide settings
-default_config = get_config()
+default_config = settings
 
 class AsyncLLMPipeline:
     def __init__(self, model:str=None):
@@ -113,7 +113,7 @@ class AsyncLLMPipeline:
         try:
             # Check if this is being used within the R.E.D. framework
             try:
-                red_config = get_config()
+                red_config = settings
                 pipeline_config = red_config.get('llm_validation', {}).get('pipeline', {})
                 batch_size = pipeline_config.get('batch_size', 20)
                 request_delay = pipeline_config.get('request_delay', 0.05)
@@ -141,23 +141,62 @@ class AsyncLLMPipeline:
 nest_asyncio.apply()
 
 class LLM(AsyncLLMPipeline):
+    """
+    Singleton LLM wrapper to avoid zombie resources and multiple model initializations.
+    """
+
+    _instances = {}
+
+    def __new__(cls,
+                system_prompt: str = None,
+                few_shot_examples: list = None,
+                model: str = None,
+                max_timeout_per_request: int = None):
+        """
+        Singleton pattern implementation with model-specific instances.
+
+        Each unique model configuration gets its own singleton instance.
+        """
+        # Use defaults if not provided
+        system_prompt = system_prompt or default_config.default_system_prompt
+        few_shot_examples = few_shot_examples or []
+        model = model or default_config.default_model
+        max_timeout_per_request = max_timeout_per_request or default_config.default_timeout
+
+        # Create a unique key for this configuration
+        instance_key = f"{model}_{hash(system_prompt)}_{max_timeout_per_request}"
+
+        if instance_key not in cls._instances:
+            instance = super().__new__(cls)
+            cls._instances[instance_key] = instance
+
+        return cls._instances[instance_key]
 
     def __init__(self,
-                 system_prompt:str=default_config.default_system_prompt,
-                 few_shot_examples:list=[],
-                 model:str=default_config.default_model,
-                 max_timeout_per_request:int=default_config.default_timeout,):
+                 system_prompt: str = None,
+                 few_shot_examples: list = None,
+                 model: str = None,
+                 max_timeout_per_request: int = None):
+        """
+        Initialize LLM instance (only runs once per singleton).
+        """
+        # Use defaults if not provided
+        self.system_prompt = system_prompt or default_config.default_system_prompt
+        self.few_shot_examples = few_shot_examples or []
+        self.model = model or default_config.default_model
+        self.max_timeout_per_request = max_timeout_per_request or default_config.default_timeout
 
-        self.system_prompt = system_prompt
-        self.few_shot_examples = few_shot_examples
-        self.model = model
-
-        self.max_timeout_per_request = max_timeout_per_request
+        # Check if already initialized (singleton pattern)
+        if hasattr(self, '_singleton_initialized'):
+            return
 
         # Get model-specific configurations
-        self.model_configs = get_model_configs(model)
+        self.model_configs = get_model_configs(self.model)
 
-        logger.info(f'Using model : {self.model}')
+        logger.info(f'Initializing LLM singleton with model: {self.model}')
+
+        # Mark as initialized
+        self._singleton_initialized = True
 
         super().__init__(model=self.model)
 
