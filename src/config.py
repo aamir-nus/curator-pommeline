@@ -12,11 +12,45 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     """Application settings with environment variable support."""
 
-    # Model configurations
+    # default LLM settings
     default_llm_model: str = Field(
-        default="z-ai/glm-4.5-air",
+        default="glm-4.5-air",
         description="Default LLM model for inference"
     )
+
+    default_system_instructions: str = Field(
+        default="You are a helpful AI assistant specialized in answering questions based on provided data.",
+        description="Default system instructions for the chatbot"
+    )
+
+    default_system_prompt: str = Field(
+        default="You are a helpful AI assistant specialized in answering questions based on provided data.",
+        description="Default system prompt for LLM (alias for default_system_instructions)"
+    )
+
+    default_model: str = Field(
+        default="glm-4.5-air",
+        description="Default model name for LLM"
+    )
+
+    default_timeout: int = Field(
+        default=60,
+        description="Default timeout in seconds for API requests"
+    )
+
+    default_llm_validation: Dict[str, Any] = Field(
+        default={
+            "pipeline": {
+                "batch_size": 20,
+                "request_delay": 0.05
+            }
+        },
+        description="Default LLM validation configuration"
+    )
+
+
+
+
     embedding_model: str = Field(
         default="google/embeddinggemma-300m",
         description="Embedding model for semantic search"
@@ -174,7 +208,7 @@ def get_model_config(model_name: Optional[str] = None) -> Dict[str, Any]:
     model_name = model_name or settings.default_llm_model
 
     configs = {
-        "z-ai/glm-4.5-air": {
+        "glm-4.5-air": {
             "provider": "openrouter",
             "model": "glm-4.5-air",
             "api_key": settings.openrouter_api_key,
@@ -206,7 +240,7 @@ def get_model_config(model_name: Optional[str] = None) -> Dict[str, Any]:
         },
     }
 
-    return configs.get(model_name, configs["z-ai/glm-4.5-air"])
+    return configs.get(model_name, configs["glm-4.5-air"])
 
 
 def get_embedding_config() -> Dict[str, Any]:
