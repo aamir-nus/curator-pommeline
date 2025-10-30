@@ -1,0 +1,36 @@
+[project]
+name = "curator-pommeline"
+version = "0.1.0"
+description = "LLM-powered chatbot with FastAPI, semantic search, and guardrails"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "aiohttp>=3.13.1",
+    "anthropic>=0.71.0",
+    "fastapi>=0.120.0",
+    "google-api-python-client>=2.185.0",
+    "grpcio>=1.76.0",
+    "ipykernel>=7.1.0",
+    "jupyterlab>=4.4.10",
+    "markdown>=3.9",
+    "nbclient>=0.10.2",
+    "nbformat>=5.10.4",
+    "nest-asyncio>=1.6.0",
+    "notebook>=7.4.7",
+    "numpy>=2.2.6",
+    "onnxruntime-silicon>=1.16.3",
+    "openai>=2.6.1",
+    "pinecone>=3.0.0",
+    "pydantic>=2.12.3",
+    "pydantic-settings>=2.11.0",
+    "pytest>=8.4.2",
+    "python-dotenv>=1.2.1",
+    "python-json-logger>=4.0.0",
+    "python-multipart>=0.0.20",
+    "rank-bm25>=0.2.2",
+    "sentence-transformers>=5.1.2",
+    "tiktoken>=0.12.0",
+    "torch>=2.9.0",
+    "tqdm>=4.67.1",
+    "uvicorn>=0.38.0",
+]
