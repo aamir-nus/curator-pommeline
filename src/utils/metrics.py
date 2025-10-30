@@ -69,9 +69,9 @@ class MetricsCollector:
         if len(self.metrics) > self.max_points:
             self.metrics = self.metrics[-self.max_points:]
 
-        # Log the metric with explicit latency information
+        # Log the metric at DEBUG level only (errors will be logged separately)
         latency_info = f"{value:.1f}ms" if 'ms' in operation.lower() or operation in ['tool_retrieve', 'embeddings', 'queries_performed'] else f"{value:.3f}"
-        logger.info(
+        logger.debug(
             f"Performance: {operation} took {latency_info}",
             operation=operation,
             value=value,
@@ -82,7 +82,7 @@ class MetricsCollector:
     def increment_counter(self, counter_name: str, increment: int = 1):
         """Increment a counter."""
         self.counters[counter_name] = self.counters.get(counter_name, 0) + increment
-        logger.info(
+        logger.debug(
             f"Counter incremented: {counter_name}",
             counter=counter_name,
             value=self.counters[counter_name]
