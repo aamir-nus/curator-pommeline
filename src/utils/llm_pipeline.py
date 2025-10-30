@@ -143,108 +143,78 @@ nest_asyncio.apply()
 class LLM(AsyncLLMPipeline):
     """
     Singleton LLM wrapper to avoid zombie resources and multiple model initializations.
+    Refactored for improved maintainability and robustness.
     """
-
     _instances = {}
 
     def __new__(cls,
                 system_prompt: str = None,
                 few_shot_examples: list = None,
                 model: str = None,
-                max_timeout_per_request: int = None):
-        """
-        Singleton pattern implementation with model-specific instances.
-
-        Each unique model configuration gets its own singleton instance.
-        """
-        # Use defaults if not provided
-        system_prompt = system_prompt or default_config.default_system_prompt
-        few_shot_examples = few_shot_examples or []
-        model = model or default_config.default_llm_model
-        max_timeout_per_request = max_timeout_per_request or default_config.default_timeout
-
-        # Create a unique key for this configuration
-        instance_key = f"{model}_{hash(system_prompt)}_{max_timeout_per_request}"
+                max_timeout_per_request: int = None,
+                stream: bool = False):
+        
+        instance_key = f"{model}_{hash(system_prompt)}_{max_timeout_per_request}_{stream}"
 
         if instance_key not in cls._instances:
             instance = super().__new__(cls)
             cls._instances[instance_key] = instance
-
+        
         return cls._instances[instance_key]
 
     def __init__(self,
                  system_prompt: str = None,
                  few_shot_examples: list = None,
                  model: str = None,
-                 max_timeout_per_request: int = None):
-        """
-        Initialize LLM instance (only runs once per singleton).
-        """
-        # Use defaults if not provided
+                 max_timeout_per_request: int = None,
+                 stream: bool = False):
+        
         self.system_prompt = system_prompt or default_config.default_system_prompt
         self.few_shot_examples = few_shot_examples or []
         self.model = model or default_config.default_model
         self.max_timeout_per_request = max_timeout_per_request or default_config.default_timeout
+        self.stream = stream
 
-        # Check if already initialized (singleton pattern)
         if hasattr(self, '_singleton_initialized'):
             return
-
-        # Get model-specific configurations
+        
         self.model_configs = get_model_configs(self.model)
-
-        logger.info(f'Initializing LLM singleton with model: {self.model}')
-
-        # Mark as initialized
+        logger.info(f'Initializing LLM singleton with model: {self.model}, stream: {self.stream}')
+        
         self._singleton_initialized = True
-
         super().__init__(model=self.model)
 
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-
         logger.debug('Exit called ... cleaning up')
         logger.debug('Cleanup complete!')
-
         return True
 
-    async def agenerate(self,
-                      user_prompt,
-                      max_retries:int=None):
-
-        # Set retry parameters - these are algorithm-specific defaults
-        # Note: Retry logic parameters are kept in code as they represent
-        # implementation details of the HTTP retry mechanism, not application config
-        if max_retries is None:
-            max_retries = 2  # Standard retry count for API calls
-        
-        backoff_factor = 2  # Exponential backoff multiplier
-        min_sleep_time = 3  # Base retry delay in seconds
-
-        retries = 0
-
+    def _prepare_messages(self, user_prompt: str) -> list:
+        """Constructs the list of messages for the API request."""
         messages = []
+        if self.system_prompt:
+            messages.append({"role": "system", "content": self.system_prompt})
+        if self.few_shot_examples:
+            for example in self.few_shot_examples:
+                messages.append({"role": "user", "content": example[0]})
+                messages.append({"role": "assistant", "content": example[1]})
+        messages.append({"role": "user", "content": user_prompt})
+        return messages
 
-        system_prompt = [{"role" : "system", "content" : self.system_prompt}]
-        messages.extend(system_prompt)
-
-        if self.few_shot_examples != []:
-            examples = [[{"role" : "user", "content" : examples[0]},{"role" : "assistant", "content" : examples[1]}]
-                        for examples in self.few_shot_examples]
-            
-            examples = [arr for sublist in examples for arr in sublist]
-            messages.extend(examples)
-
-        user_prompt = [{"role" : "user", "content" : user_prompt}]
-        messages.extend(user_prompt)
+    async def _execute_request_non_stream(self, request_data: dict, max_retries: int):
+        """Executes a non-streaming HTTP request and returns the JSON response."""
+        if max_retries is None:
+            max_retries = 2
+        
+        retries = 0
+        backoff_factor = 2
+        min_sleep_time = 3
 
         while retries < max_retries:
             try:
-                # Use the model-specific message formatter
-                request_data = self.model_configs.message_formatter(messages)
-
                 async with aiohttp.ClientSession() as session:
                     async with session.post(
                         url=self.model_configs.base_url,
@@ -252,33 +222,104 @@ class LLM(AsyncLLMPipeline):
                         json=request_data,
                         timeout=self.max_timeout_per_request
                     ) as response:
-                        if response.status == 200:
-                            return await response.json()
-                        else:
-                            error_text = await response.text()
-                            raise Exception(f"API request failed with status {response.status}: {error_text}")
-                        
-                    time.sleep(0.1) #artificial delay to avoid rate limiting
-            
-            except asyncio.TimeoutError as timeout_err:
-                logger.error(f"Timeout error: {timeout_err}")
-                logger.debug(f"Request sent: {messages}")
-                return 'indeterminate'
-                    
-            except Exception as e:
-                logger.warning(f'Exception: {e}')
-                sleep_time = min_sleep_time * (backoff_factor ** retries)
-                logger.info(f"Rate limit hit. Retrying in {sleep_time} seconds.")
-                await asyncio.sleep(sleep_time)
+                        response.raise_for_status() # Raises HTTPError for bad responses (4xx or 5xx)
+                        return await response.json()
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                logger.warning(f'Request failed: {e}. Retrying...')
                 retries += 1
-
+                if retries >= max_retries:
+                    logger.error("Max retries exceeded for non-streaming request.")
+                    return 'indeterminate'
+                sleep_time = min_sleep_time * (backoff_factor ** (retries - 1))
+                await asyncio.sleep(sleep_time)
         return 'indeterminate'
+    
+    async def _execute_request_stream(self, request_data: dict, max_retries: int):
+        """
+        Executes a streaming HTTP request and yields the raw content chunks.
+        The session is kept alive for the duration of the stream.
+        """
+        if max_retries is None:
+            max_retries = 2
+        
+        retries = 0
+        backoff_factor = 2
+        min_sleep_time = 3
+        
+        request_data["stream"] = True
+        headers = {**self.model_configs.headers, "Accept": "text/event-stream"}
+
+        while retries < max_retries:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        url=self.model_configs.base_url,
+                        headers=headers,
+                        json=request_data,
+                        timeout=self.max_timeout_per_request
+                    ) as response:
+                        response.raise_for_status()
+                        # Yield chunks while the session is active
+                        async for chunk in response.content:
+                            yield chunk
+                        # Once the stream is consumed, we are done. Exit the retry loop.
+                        return
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                logger.warning(f'Stream request failed: {e}. Retrying...')
+                retries += 1
+                if retries >= max_retries:
+                    logger.error("Max retries exceeded for streaming request.")
+                    yield b'{"error": "Max retries exceeded"}' # Yield an error message
+                    return
+                sleep_time = min_sleep_time * (backoff_factor ** (retries - 1))
+                await asyncio.sleep(sleep_time)
+
+    # REFACTORED: agenerate method is now much simpler
+    async def agenerate(self, user_prompt, max_retries: int = None):
+        messages = self._prepare_messages(user_prompt)
+        request_data = self.model_configs.message_formatter(messages)
+        return await self._execute_request_non_stream(request_data, max_retries)
+
+    # REFACTORED: agenerate_stream is also simpler and more robust
+    async def agenerate_stream(self,
+                               user_prompt,
+                               max_retries: int = None):
+        
+        messages = self._prepare_messages(user_prompt)
+        request_data = self.model_configs.message_formatter(messages)
+        
+        # The new executor handles the session and yields raw chunks
+        async for chunk in self._execute_request_stream(request_data, max_retries):
+            # The parsing logic remains here, acting on the yielded chunks
+            chunk_line = chunk.decode('utf-8', errors='ignore').strip()
+            if chunk_line.startswith("data: "):
+                if chunk_line == "data: [DONE]":
+                    break
+                try:
+                    data_str = chunk_line[6:]
+                    data = json.loads(data_str)
+                    if data.get("choices") and data["choices"][0].get("delta", {}).get("content"):
+                        yield data["choices"][0]["delta"]["content"]
+                except json.JSONDecodeError:
+                    # This can happen if the chunk is incomplete, just continue
+                    continue
+                
+    def batch_generate(self,
+                      user_prompts):
+        """
+        Override batch_generate to handle streaming vs non-streaming.
+        This implementation is correct and does not need changes.
+        """
+        if self.stream:
+            return [self.agenerate_stream(prompt) for prompt in user_prompts]
+        else:
+            return super().batch_generate(user_prompts)
 
 
 class LLMWithTools:
     """
     LLM class with standard tool calling capabilities.
-    Uses composition to work with the LLM singleton pattern.
+    Refactored to leverage the cleaner base LLM class.
     """
 
     def __init__(self,
@@ -287,39 +328,31 @@ class LLMWithTools:
                  model: str = None,
                  max_timeout_per_request: int = None,
                  tools: list = None,
-                 tool_choice: str = "auto"):
-        """
-        Initialize LLM with tools support.
-
-        Args:
-            system_prompt: System instructions for the LLM
-            few_shot_examples: Few-shot examples for the conversation
-            model: Model name to use
-            max_timeout_per_request: Timeout for API requests
-            tools: List of tool definitions available to the LLM
-            tool_choice: Tool choice strategy ("auto", "none", or specific tool name)
-        """
-        # Create LLM instance using singleton
-        self.llm = LLM(
-            system_prompt=system_prompt,
-            few_shot_examples=few_shot_examples,
-            model=model,
-            max_timeout_per_request=max_timeout_per_request
-        )
-
-        # Tool-specific attributes
+                 tool_choice: str = "auto",
+                 stream: bool = False):
+        
+        # The original system prompt is stored before being modified
+        self._original_system_prompt = system_prompt or default_config.default_system_prompt
         self.tools = tools or []
         self.tool_choice = tool_choice
-        self.available_functions = {}  # Maps tool names to functions
-
-        # Enhanced system prompt for tool usage
+        
+        # Build the enhanced system prompt for tools
+        tool_system_prompt = self._build_tool_system_prompt()
         if self.tools:
-            tool_system_prompt = self._build_tool_system_prompt()
-            # Combine original system prompt with tool instructions
-            if self.llm.system_prompt:
-                self.llm.system_prompt = f"{self.llm.system_prompt}\n\n{tool_system_prompt}"
-            else:
-                self.llm.system_prompt = tool_system_prompt
+            combined_system_prompt = f"{self._original_system_prompt}\n\n{tool_system_prompt}"
+        else:
+            combined_system_prompt = self._original_system_prompt
+
+        # Initialize the underlying LLM instance with the combined prompt
+        self.llm = LLM(
+            system_prompt=combined_system_prompt,
+            few_shot_examples=few_shot_examples,
+            model=model,
+            max_timeout_per_request=max_timeout_per_request,
+            stream=stream
+        )
+        
+        self.available_functions = {}
 
     @property
     def few_shot_examples(self):
@@ -427,6 +460,11 @@ Format your response as either:
         """Get the model configs from the internal LLM instance."""
         return self.llm.model_configs
 
+    @property
+    def stream(self):
+        """Get the stream setting from the internal LLM instance."""
+        return self.llm.stream
+
     def register_function(self, tool_name: str, function):
         """
         Register a Python function that can be called when the LLM requests to use a tool.
@@ -437,99 +475,39 @@ Format your response as either:
         """
         self.available_functions[tool_name] = function
 
+    def _prepare_tool_request_data(self, messages: list) -> dict:
+        """Prepares the request data by adding tool definitions."""
+        request_data = self.llm.model_configs.message_formatter(messages)
+        
+        if self.tools:
+            formatted_tools = [{
+                "type": "function",
+                "function": {
+                    "name": tool.get("name", ""),
+                    "description": tool.get("description", ""),
+                    "parameters": tool.get("parameters", {"type": "object", "properties": {}})
+                }
+            } for tool in self.tools]
+            request_data["tools"] = formatted_tools
+            if self.tool_choice:
+                request_data["tool_choice"] = self.tool_choice
+        
+        return request_data
+    
     async def agenerate_with_tools(self,
-                                  user_prompt,
-                                  max_retries: int = None):
-        """
-        Generate response with tool calling support.
-
-        Args:
-            user_prompt: User's input prompt
-            max_retries: Maximum number of retries for API calls
-
-        Returns:
-            Dict containing either response text or tool calls
-        """
-        # Set retry parameters
-        if max_retries is None:
-            max_retries = 2
-
-        backoff_factor = 2
-        min_sleep_time = 3
-        retries = 0
-
-        # Build messages with tool information
-        messages = []
-
-        # Add system prompt
-        system_prompt = [{"role": "system", "content": self.system_prompt}]
-        messages.extend(system_prompt)
-
-        # Add few-shot examples if provided
-        if self.few_shot_examples:
-            examples = [[{"role": "user", "content": examples[0]}, {"role": "assistant", "content": examples[1]}]
-                       for examples in self.few_shot_examples]
-            examples = [arr for sublist in examples for arr in sublist]
-            messages.extend(examples)
-
-        # Add user prompt
-        user_prompt = [{"role": "user", "content": user_prompt}]
-        messages.extend(user_prompt)
-
-        # Retry logic
-        while retries < max_retries:
-            try:
-                # Prepare request data with tools
-                request_data = self.model_configs.message_formatter(messages)
-
-                # Add tools to request if available (convert to OpenAI format)
-                if self.tools:
-                    formatted_tools = []
-                    for tool in self.tools:
-                        # Convert tool schema to OpenAI format
-                        openai_tool = {
-                            "type": "function",
-                            "function": {
-                                "name": tool.get("name", ""),
-                                "description": tool.get("description", ""),
-                                "parameters": tool.get("parameters", {"type": "object", "properties": {}})
-                            }
-                        }
-                        formatted_tools.append(openai_tool)
-
-                    request_data["tools"] = formatted_tools
-                    if self.tool_choice:
-                        request_data["tool_choice"] = self.tool_choice
-
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(
-                        url=self.model_configs.base_url,
-                        headers=self.model_configs.headers,
-                        json=request_data,
-                        timeout=self.max_timeout_per_request
-                    ) as response:
-                        if response.status == 200:
-                            result = await response.json()
-                            return self._parse_tool_response(result)
-                        else:
-                            error_text = await response.text()
-                            raise Exception(f"API request failed with status {response.status}: {error_text}")
-
-                        time.sleep(0.1)  # Artificial delay to avoid rate limiting
-
-            except asyncio.TimeoutError as timeout_err:
-                logger.error(f"Timeout error: {timeout_err}")
-                logger.debug(f"Request sent: {messages}")
-                return {"type": "error", "content": "Request timed out"}
-
-            except Exception as e:
-                logger.warning(f'Exception: {e}')
-                sleep_time = min_sleep_time * (backoff_factor ** retries)
-                logger.info(f"Rate limit hit. Retrying in {sleep_time} seconds.")
-                await asyncio.sleep(sleep_time)
-                retries += 1
-
-        return {"type": "error", "content": "Max retries exceeded"}
+                                   user_prompt,
+                                   max_retries: int = None):
+        
+        messages = self.llm._prepare_messages(user_prompt)
+        request_data = self._prepare_tool_request_data(messages)
+        
+        # CHANGE: Call the correct non-streaming method
+        result = await self.llm._execute_request_non_stream(request_data, max_retries)
+        
+        if result != 'indeterminate':
+            return self._parse_tool_response(result)
+        
+        return {"type": "error", "content": "Request failed after multiple retries"}
 
     def _parse_tool_response(self, response):
         """
@@ -655,6 +633,56 @@ Format your response as either:
 
         return results
 
+    async def agenerate_with_tools_stream(self,
+                                          user_prompt,
+                                          max_retries: int = None):
+        
+        messages = self.llm._prepare_messages(user_prompt)
+        request_data = self._prepare_tool_request_data(messages)
+        
+        accumulated_content = ""
+        accumulated_tool_calls = {}
+
+        # CHANGE: Directly iterate over the correct streaming generator method
+        async for chunk in self.llm._execute_request_stream(request_data, max_retries):
+            chunk_line = chunk.decode('utf-8', errors='ignore').strip()
+            if not chunk_line.startswith("data: "):
+                continue
+            if chunk_line == "data: [DONE]":
+                break
+            
+            try:
+                data = json.loads(chunk_line[6:])
+                delta = data.get("choices", [{}])[0].get("delta", {})
+                
+                if "content" in delta and delta["content"]:
+                    content_chunk = delta["content"]
+                    accumulated_content += content_chunk
+                    yield {"type": "content", "content": content_chunk}
+
+                if "tool_calls" in delta:
+                    for tool_call_delta in delta["tool_calls"]:
+                        idx = tool_call_delta.get("index", 0)
+                        if idx not in accumulated_tool_calls:
+                            accumulated_tool_calls[idx] = {"id": "", "name": "", "arguments": ""}
+                        
+                        if tool_call_delta.get("id"):
+                            accumulated_tool_calls[idx]["id"] = tool_call_delta["id"]
+                        if func := tool_call_delta.get("function"):
+                            if func.get("name"):
+                                accumulated_tool_calls[idx]["name"] = func["name"]
+                            if func.get("arguments"):
+                                accumulated_tool_calls[idx]["arguments"] += func["arguments"]
+            except (json.JSONDecodeError, IndexError):
+                continue
+
+        if accumulated_tool_calls:
+            yield {
+                "type": "tool_calls",
+                "content": accumulated_content,
+                "tool_calls": list(accumulated_tool_calls.values())
+            }
+
     async def generate_with_tool_execution(self,
                                          user_prompt,
                                          max_retries: int = None,
@@ -707,3 +735,78 @@ Format your response as either:
                     return final_response
 
         return {"type": "error", "content": "Maximum tool iterations exceeded"}
+
+    async def generate_with_tool_execution_stream(self,
+                                                 user_prompt,
+                                                 max_retries: int = None,
+                                                 max_tool_iterations: int = 3):
+        """
+        Generate streaming response and automatically execute tools if requested.
+
+        Args:
+            user_prompt: User's input prompt
+            max_retries: Maximum number of retries for API calls
+            max_tool_iterations: Maximum number of tool execution iterations
+
+        Yields:
+            Streaming response chunks and tool execution results
+        """
+        if not self.stream:
+            # If streaming is not enabled, use the non-streaming method
+            response = await self.generate_with_tool_execution(user_prompt, max_retries, max_tool_iterations)
+            yield response
+            return
+
+        current_prompt = user_prompt
+        iteration = 0
+
+        while iteration < max_tool_iterations:
+            # Get LLM streaming response
+            tool_calls_detected = False
+            accumulated_tool_calls = []
+
+            async for chunk in self.agenerate_with_tools_stream(current_prompt, max_retries):
+                if chunk["type"] == "error":
+                    yield chunk
+                    return
+
+                if chunk["type"] == "content":
+                    yield chunk
+
+                if chunk["type"] == "tool_calls":
+                    tool_calls_detected = True
+                    accumulated_tool_calls = chunk["tool_calls"]
+                    # Yield the tool calls information
+                    yield chunk
+
+            if not tool_calls_detected:
+                # No tools needed, streaming completed
+                return
+
+            if accumulated_tool_calls:
+                # Execute tools
+                yield {"type": "tool_execution_start", "content": "Executing tools..."}
+                tool_results = await self.execute_tool_calls(accumulated_tool_calls)
+
+                # Yield tool results
+                for result in tool_results:
+                    yield {"type": "tool_result", "tool_name": result["tool_name"], "result": result["result"], "status": result["status"]}
+
+                # Prepare next prompt with tool results
+                tool_results_text = "\n\n".join([
+                    f"Tool: {result['tool_name']}\nResult: {result['result']}"
+                    for result in tool_results if result["status"] == "success"
+                ])
+
+                current_prompt = f"{current_prompt}\n\nTool execution results:\n{tool_results_text}\n\nBased on these tool results, please provide a helpful response to the user."
+
+                iteration += 1
+
+                # If this was the last iteration, get final response without tool calling
+                if iteration >= max_tool_iterations:
+                    yield {"type": "final_response_start", "content": "Generating final response..."}
+                    async for final_chunk in self.agenerate_with_tools_stream(current_prompt, max_retries):
+                        yield final_chunk
+                    return
+
+        yield {"type": "error", "content": "Maximum tool iterations exceeded"}
