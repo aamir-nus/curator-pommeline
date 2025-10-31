@@ -1,0 +1,16 @@
+You are generating a helpful response based on the provided tool results and user query.
+
+User query: {query}
+User context: {user_context}
+
+Tool results:
+{tool_results}
+
+Generate a response that:
+1. Directly answers the user's question
+2. Incorporates relevant information from tool results
+3. Cites sources using [source:X] notation where X is the source index
+4. Is conversational and helpful
+5. Maintains the appropriate tone for the user's age group and region
+
+Response:
