@@ -62,7 +62,7 @@ git clone https://github.com/aamir-nus/curator-pommeline/
 2. **Install dependencies**
 
 ```bash
-uv install #project is setup using uv, not pip
+uv sync --all-groups #project is setup using uv, not pip
 ```
 
 3. **Configure environment variables**
