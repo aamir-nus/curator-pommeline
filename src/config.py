@@ -134,7 +134,7 @@ class Settings(BaseSettings):
 
     # Ingestion tracking
     current_ingestion_id: str = Field(
-        default="",
+        default="44344f0d",
         description="Current ingestion index ID for BM25 vectorizer lookup"
     )
 
@@ -216,7 +216,7 @@ def get_model_config(model_name: Optional[str] = None) -> Dict[str, Any]:
             "temperature": 0.0,
             "max_tokens": 2048,
         },
-        "z-ai/glm-4-32b": {
+        "glm-4-32b": {
             "provider": "openrouter",
             "model": "glm-4-32b",
             "api_key": settings.openrouter_api_key,
@@ -224,16 +224,16 @@ def get_model_config(model_name: Optional[str] = None) -> Dict[str, Any]:
             "temperature": 0.0,
             "max_tokens": 2048,
         },
-        "gpt-4": {
+        "gpt-4o": {
             "provider": "openai",
-            "model": "gpt-4",
+            "model": "gpt-4o",
             "api_key": settings.openai_api_key,
             "temperature": 0.7,
             "max_tokens": 2048,
         },
-        "claude-3-sonnet": {
+        "claude-3.5-sonnet": {
             "provider": "anthropic",
-            "model": "claude-3-sonnet-20240229",
+            "model": "claude-3.5-sonnet-20240229",
             "api_key": settings.anthropic_api_key,
             "temperature": 0.7,
             "max_tokens": 2048,

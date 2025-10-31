@@ -1,11 +1,12 @@
 """
 Inference routes for chat and tool execution.
 """
-
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import random
 import time
 from typing import List
+
 from fastapi import APIRouter, HTTPException, BackgroundTasks
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from ..models import (
     ChatRequest, ChatResponse, BatchChatRequest, BatchChatResponse,
@@ -189,6 +190,9 @@ async def get_available_models():
 async def get_available_tools():
     """Get information about available tools."""
     try:
+        # Get system stats from orchestrator
+        system_stats = orchestrator.get_system_stats()
+
         tools_info = {
             "available_tools": [
                 {
@@ -197,8 +201,9 @@ async def get_available_tools():
                     "arguments": {
                         "query": "string - The search query",
                         "top_k": "integer - Number of results (default: 5)",
-                        "similarity_threshold": "float - Minimum similarity (default: 0.7)",
-                        "filters": "dict - Optional filters"
+                        "similarity_threshold": "float - Minimum similarity (default: 0.15)",
+                        "filters": "dict - Optional filters",
+                        "search_mode": "string - Search mode: semantic, keyword, or hybrid (default: hybrid)"
                     }
                 },
                 {
@@ -214,10 +219,7 @@ async def get_available_tools():
                     }
                 }
             ],
-            "tool_stats": {
-                "retrieve_tool": system_stats["components"]["retrieve_tool"],
-                "search_product_tool": system_stats["components"]["search_product_tool"]
-            }
+            "tool_stats": system_stats.get("components", {})
         }
         return tools_info
     except Exception as e:
@@ -375,7 +377,6 @@ async def search_product_tool(request: SearchProductRequest):
 
 def generate_mock_products(request: SearchProductRequest) -> List[ProductInfo]:
     """Generate mock product search results."""
-    import random
 
     # Mock product database
     mock_db = [
