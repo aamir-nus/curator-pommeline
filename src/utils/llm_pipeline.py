@@ -89,7 +89,7 @@ class AsyncLLMPipeline:
                 Failed requests return 'indeterminate' as the response.
 
         Example:
-            >>> pipeline = MyLLMPipeline("gpt-4")
+            >>> pipeline = AsyncLLMPipeline("gpt-4")
             >>> prompts = ["Hello", "How are you?"]
             >>> responses = await pipeline.model_response(prompts)
             >>> print(responses)  # ['Hello!', 'I am doing well!']
@@ -169,7 +169,7 @@ class AsyncLLMPipeline:
             - request_delay (float): Delay between batches in seconds (default: 0.05)
 
         Example:
-            >>> llm = LLM("gpt-4")
+            >>> llm = AsyncLLMPipeline("gpt-4")
             >>> prompts = ["Hello", "How are you?", "What's AI?"]
             >>> responses = llm.batch_generate(prompts)
             >>> print(len(responses))  # 3
