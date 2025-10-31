@@ -9,14 +9,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import uvicorn
 
-from .routes import inference, ingest, guardrail
+from .routes import inference, ingest, guardrail, chat
 from .models import ErrorResponse, HealthResponse, StatsResponse
 from src.utils.logger import get_logger
 from src.utils.metrics import metrics
-from src.orchestrator.chatbot import get_chatbot_orchestrator
+from src.orchestrator.chatbot import get_multi_turn_chatbot
 
 logger = get_logger("api_main")
-orchestrator = get_chatbot_orchestrator()
+chatbot = get_multi_turn_chatbot()
 
 # Track application start time for uptime
 app_start_time = time.time()
@@ -95,6 +95,7 @@ async def log_requests(request: Request, call_next):
 app.include_router(inference.router)
 app.include_router(ingest.router)
 app.include_router(guardrail.router)
+app.include_router(chat.router)
 
 
 # Root endpoint
@@ -106,7 +107,8 @@ async def root():
         "version": "0.1.0",
         "description": "LLM-powered chatbot with semantic search and guardrails",
         "endpoints": {
-            "chat": "/inference/chat",
+            "chat": "/chat",
+            "chat_sessions": "/chat/sessions/{session_id}/stats",
             "ingest": "/ingest/documents",
             "guardrail": "/guardrail/classify",
             "docs": "/docs",
@@ -124,22 +126,45 @@ async def health_check():
     try:
         uptime_seconds = time.time() - app_start_time
 
-        # Check system components
-        system_stats = orchestrator.get_system_stats()
+        # Check system components using the chatbot
+        system_stats = chatbot.get_system_stats()
 
         # Determine component health
         components = {}
         overall_healthy = True
 
-        for component_name, component_stats in system_stats["components"].items():
-            # Simple health check - component exists and has basic stats
-            is_healthy = bool(component_stats)
-            components[component_name] = {
-                "status": "healthy" if is_healthy else "unhealthy",
-                "details": component_stats
+        # Add chatbot components
+        if "guardrail_classifier" in system_stats:
+            components["guardrail_classifier"] = {
+                "status": "healthy",
+                "details": system_stats["guardrail_classifier"]
             }
-            if not is_healthy:
-                overall_healthy = False
+
+        if "retrieve_tool" in system_stats:
+            components["retrieve_tool"] = {
+                "status": "healthy",
+                "details": system_stats["retrieve_tool"]
+            }
+
+        if "search_product_tool" in system_stats:
+            components["search_product_tool"] = {
+                "status": "healthy",
+                "details": system_stats["search_product_tool"]
+            }
+
+        # Add system-level components
+        components["chatbot"] = {
+            "status": "healthy",
+            "details": {
+                "total_active_sessions": system_stats.get("total_active_sessions", 0),
+                "default_ingestion_id": system_stats.get("default_ingestion_id", "")
+            }
+        }
+
+        components["api"] = {
+            "status": "healthy",
+            "details": {"uptime_seconds": uptime_seconds}
+        }
 
         health_status = "healthy" if overall_healthy else "degraded"
 
@@ -169,8 +194,8 @@ async def health_check():
 async def get_system_stats():
     """Get comprehensive system statistics."""
     try:
-        # Get system stats from orchestrator
-        system_stats = orchestrator.get_system_stats()
+        # Get system stats from chatbot
+        system_stats = chatbot.get_system_stats()
 
         # Get metrics stats
         metrics_stats = metrics.get_system_stats()
