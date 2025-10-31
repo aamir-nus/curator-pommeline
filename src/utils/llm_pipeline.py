@@ -30,16 +30,70 @@ logger = get_logger(__name__)
 default_config = settings
 
 class AsyncLLMPipeline:
-    def __init__(self, model:str=None):
+    """
+    Abstract base class for asynchronous LLM pipelines.
+
+    This class provides the foundation for implementing various LLM models
+    with standardized async generation capabilities and batch processing.
+
+    Attributes:
+        model (str): The name/identifier of the LLM model to use
+    """
+
+    def __init__(self, model: str = None):
+        """
+        Initialize the AsyncLLMPipeline with a specified model.
+
+        Args:
+            model (str, optional): The model identifier. Defaults to None.
+
+        Raises:
+            NotImplementedError: This is an abstract base class
+        """
         self.model = model
 
-    async def agenerate(self,
-                      user_prompt,
-                      max_retries:int=5):
+    async def agenerate(self, user_prompt, max_retries: int = 5):
+        """
+        Generate a response from the LLM for a single prompt.
+
+        This method must be implemented by subclasses to handle the actual
+        API communication with their respective LLM providers.
+
+        Args:
+            user_prompt (str): The input prompt to send to the LLM
+            max_retries (int, optional): Maximum number of retry attempts
+                for failed requests. Defaults to 5.
+
+        Returns:
+            The response from the LLM (format depends on implementation)
+
+        Raises:
+            NotImplementedError: This method must be implemented by subclasses
+        """
         raise NotImplementedError
 
-    async def model_response(self,
-                             user_prompts):
+    async def model_response(self, user_prompts):
+        """
+        Process multiple prompts concurrently using the LLM.
+
+        This method takes a single prompt or list of prompts, creates async
+        tasks for each, and executes them concurrently using asyncio.gather.
+        It handles response decoding for different model formats.
+
+        Args:
+            user_prompts (Union[str, List[str]]): A single prompt string or
+                list of prompt strings to process
+
+        Returns:
+            List[str]: List of decoded responses, one for each input prompt.
+                Failed requests return 'indeterminate' as the response.
+
+        Example:
+            >>> pipeline = MyLLMPipeline("gpt-4")
+            >>> prompts = ["Hello", "How are you?"]
+            >>> responses = await pipeline.model_response(prompts)
+            >>> print(responses)  # ['Hello!', 'I am doing well!']
+        """
         
         if not isinstance(user_prompts,list):
             user_prompts = [user_prompts]
@@ -90,9 +144,40 @@ class AsyncLLMPipeline:
             
         return decoded_responses
 
-    def batch_generate(self,
-                      user_prompts):
-        
+    def batch_generate(self, user_prompts):
+        """
+        Generate responses for multiple prompts using batch processing.
+
+        This method processes prompts in configurable batches to handle large
+        datasets efficiently while respecting rate limits. It includes comprehensive
+        configuration fallback patterns for different usage contexts.
+
+        Args:
+            user_prompts (Union[str, List[str]]): A single prompt string or
+                list of prompt strings to process
+
+        Returns:
+            List[str]: List of responses, one for each input prompt
+
+        Configuration Priority (Highest to Lowest):
+            1. R.E.D. framework llm_validation.pipeline config
+            2. Basic settings config
+            3. Default fallback values
+
+        Configuration Parameters:
+            - batch_size (int): Number of prompts per batch (default: 20)
+            - request_delay (float): Delay between batches in seconds (default: 0.05)
+
+        Example:
+            >>> llm = LLM("gpt-4")
+            >>> prompts = ["Hello", "How are you?", "What's AI?"]
+            >>> responses = llm.batch_generate(prompts)
+            >>> print(len(responses))  # 3
+
+        Note:
+            This is a synchronous method that uses asyncio.run() internally.
+            For async usage, use model_response() directly.
+        """
         # CONFIGURATION FALLBACK PATTERN EXPLANATION:
         # This nested try-catch pattern handles multiple configuration contexts:
         # 1. When used within the RED framework (preferred path)
@@ -108,7 +193,7 @@ class AsyncLLMPipeline:
         # - Dependency injection (too heavy for utility function)
         # - Single config source (breaks backward compatibility)
         # - Required config parameter (breaks existing usage)
-        
+
         # Get batch size and delay from config if available
         try:
             # Check if this is being used within the R.E.D. framework
@@ -117,7 +202,7 @@ class AsyncLLMPipeline:
                 pipeline_config = red_config.get('llm_validation', {}).get('pipeline', {})
                 batch_size = pipeline_config.get('batch_size', 20)
                 request_delay = pipeline_config.get('request_delay', 0.05)
-            except ImportError:
+            except (ImportError, AttributeError):
                 # Fallback to basic config
                 batch_size = 20
                 request_delay = 0.05
@@ -125,16 +210,20 @@ class AsyncLLMPipeline:
             # Fallback values if no config is available
             batch_size = 20
             request_delay = 0.05
-        
-        batched_prompts = [user_prompts[idx : idx+batch_size]
-                           for idx in range(0, len(user_prompts), batch_size)]
-        
+
+        # Create batches from the prompts
+        batched_prompts = [
+            user_prompts[idx:idx + batch_size]
+            for idx in range(0, len(user_prompts), batch_size)
+        ]
+
         outputs = []
         for batch in tqdm(batched_prompts):
             batch_output = asyncio.run(self.model_response(batch))
             outputs.extend(batch_output)
 
-            time.sleep(request_delay)  # Configurable sleep time between batches
+            # Configurable sleep time between batches for rate limiting
+            time.sleep(request_delay)
 
         return outputs
 
@@ -142,9 +231,34 @@ nest_asyncio.apply()
 
 class LLM(AsyncLLMPipeline):
     """
-    Singleton LLM wrapper to avoid zombie resources and multiple model initializations.
-    Refactored for improved maintainability and robustness.
+    Singleton LLM wrapper with streaming support and automatic resource management.
+
+    This class implements the singleton pattern to prevent multiple initializations
+    of the same model configuration, reducing resource usage and preventing
+    connection leaks. It supports both streaming and non-streaming generation.
+
+    Attributes:
+        system_prompt (str): System prompt for the LLM conversation
+        few_shot_examples (list): List of few-shot example pairs
+        model (str): Model identifier being used
+        max_timeout_per_request (int): Request timeout in seconds
+        stream (bool): Whether streaming responses are enabled
+        model_configs: Model-specific configuration object
+
+    Example:
+        >>> llm1 = LLM(model="gpt-4", stream=True)
+        >>> llm2 = LLM(model="gpt-4", stream=True)  # Returns same instance
+        >>> llm1 is llm2  # True
+        >>>
+        >>> # Use streaming
+        >>> async for chunk in llm1.agenerate_stream("Hello"):
+        ...     print(chunk, end="")
+        >>>
+        >>> # Use non-streaming
+        >>> response = await llm1.agenerate("Hello")
+        >>> print(response)
     """
+
     _instances = {}
 
     def __new__(cls,
@@ -153,13 +267,34 @@ class LLM(AsyncLLMPipeline):
                 model: str = None,
                 max_timeout_per_request: int = None,
                 stream: bool = False):
-        
+        """
+        Create or retrieve a singleton LLM instance based on configuration.
+
+        The singleton key is generated from all configuration parameters to ensure
+        that different configurations get different instances while identical
+        configurations share the same instance.
+
+        Args:
+            system_prompt (str, optional): System prompt for conversation context.
+                Defaults to project default system prompt.
+            few_shot_examples (list, optional): List of [user, assistant] example pairs.
+                Defaults to empty list.
+            model (str, optional): Model identifier. Defaults to project default model.
+            max_timeout_per_request (int, optional): Request timeout in seconds.
+                Defaults to project default timeout.
+            stream (bool, optional): Enable streaming responses. Defaults to False.
+
+        Returns:
+            LLM: Singleton instance for the specified configuration
+        """
+        # Generate unique key for this configuration
         instance_key = f"{model}_{hash(system_prompt)}_{max_timeout_per_request}_{stream}"
 
+        # Create new instance only if one doesn't exist for this configuration
         if instance_key not in cls._instances:
             instance = super().__new__(cls)
             cls._instances[instance_key] = instance
-        
+
         return cls._instances[instance_key]
 
     def __init__(self,
@@ -168,47 +303,147 @@ class LLM(AsyncLLMPipeline):
                  model: str = None,
                  max_timeout_per_request: int = None,
                  stream: bool = False):
-        
+        """
+        Initialize the LLM instance (only runs once per singleton).
+
+        This method sets up all the necessary attributes and configurations for
+        the LLM instance. Due to the singleton pattern, initialization only
+        occurs once per unique configuration.
+
+        Args:
+            system_prompt (str, optional): System prompt for conversation context.
+                Used to set the behavior and personality of the LLM.
+            few_shot_examples (list, optional): List of few-shot examples in format
+                [[user_input1, assistant_response1], [user_input2, assistant_response2], ...].
+                These examples help the LLM understand the expected response format.
+            model (str, optional): Model identifier (e.g., "gpt-4", "glm-4.5-air").
+                Must be supported by the configured model configs.
+            max_timeout_per_request (int, optional): HTTP request timeout in seconds.
+                Prevents hanging requests. Defaults to 60 seconds.
+            stream (bool, optional): Enable streaming responses for real-time output.
+                When True, responses are generated incrementally as they're received.
+
+        Note:
+            Due to singleton pattern, this method only initializes once per unique
+            configuration combination. Subsequent calls with the same parameters
+            will reuse the existing instance.
+        """
+        # Set instance attributes with fallbacks to defaults
         self.system_prompt = system_prompt or default_config.default_system_prompt
         self.few_shot_examples = few_shot_examples or []
         self.model = model or default_config.default_model
         self.max_timeout_per_request = max_timeout_per_request or default_config.default_timeout
         self.stream = stream
 
+        # Skip initialization if already done (singleton pattern)
         if hasattr(self, '_singleton_initialized'):
             return
-        
+
+        # Initialize model-specific configurations
         self.model_configs = get_model_configs(self.model)
         logger.info(f'Initializing LLM singleton with model: {self.model}, stream: {self.stream}')
-        
+
+        # Mark as initialized to prevent re-initialization
         self._singleton_initialized = True
         super().__init__(model=self.model)
 
     def __enter__(self):
+        """
+        Context manager entry point.
+
+        Returns:
+            LLM: The current instance for use in 'with' statements
+        """
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        """
+        Context manager exit point.
+
+        Currently performs minimal cleanup as the singleton pattern handles
+        resource management automatically.
+
+        Args:
+            exc_type: Exception type if an exception occurred
+            exc_val: Exception value if an exception occurred
+            exc_tb: Exception traceback if an exception occurred
+        """
         logger.debug('Exit called ... cleaning up')
         logger.debug('Cleanup complete!')
         return True
 
     def _prepare_messages(self, user_prompt: str) -> list:
-        """Constructs the list of messages for the API request."""
+        """
+        Construct the list of messages for the API request.
+
+        This method builds the conversation history by combining the system prompt,
+        few-shot examples, and the current user prompt into the format expected
+        by most LLM APIs.
+
+        Args:
+            user_prompt (str): The current user input to add to the conversation
+
+        Returns:
+            List[dict]: List of message dictionaries in the format:
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": example_user_input},
+                    {"role": "assistant", "content": example_assistant_response},
+                    {"role": "user", "content": user_prompt}
+                ]
+
+        Note:
+            The system prompt is only included if it's not empty.
+            Few-shot examples are processed in [user, assistant] pairs.
+        """
         messages = []
+
+        # Add system prompt if available
         if self.system_prompt:
             messages.append({"role": "system", "content": self.system_prompt})
+
+        # Add few-shot examples if available
         if self.few_shot_examples:
             for example in self.few_shot_examples:
-                messages.append({"role": "user", "content": example[0]})
-                messages.append({"role": "assistant", "content": example[1]})
+                # Each example should be [user_input, assistant_response]
+                if len(example) >= 2:
+                    messages.append({"role": "user", "content": example[0]})
+                    messages.append({"role": "assistant", "content": example[1]})
+
+        # Add the current user prompt
         messages.append({"role": "user", "content": user_prompt})
+
         return messages
 
     async def _execute_request_non_stream(self, request_data: dict, max_retries: int):
-        """Executes a non-streaming HTTP request and returns the JSON response."""
+        """
+        Execute a non-streaming HTTP request to the LLM API.
+
+        This method handles the actual HTTP communication with the LLM provider
+        using exponential backoff retry logic for failed requests.
+
+        Args:
+            request_data (dict): The request payload formatted for the specific
+                LLM API using the model's message formatter
+            max_retries (int, optional): Maximum number of retry attempts.
+                Defaults to 2.
+
+        Returns:
+            Union[dict, str]: The JSON response from the API, or 'indeterminate'
+                if all retry attempts fail
+
+        Raises:
+            aiohttp.ClientError: For HTTP-related errors (handled with retries)
+            asyncio.TimeoutError: For request timeouts (handled with retries)
+
+        Retry Logic:
+            - Uses exponential backoff: sleep_time = min_sleep * (backoff_factor ^ (retries - 1))
+            - Maximum sleep time increases with each retry attempt
+            - Logs warnings for each retry attempt
+        """
         if max_retries is None:
             max_retries = 2
-        
+
         retries = 0
         backoff_factor = 2
         min_sleep_time = 3
@@ -222,30 +457,59 @@ class LLM(AsyncLLMPipeline):
                         json=request_data,
                         timeout=self.max_timeout_per_request
                     ) as response:
-                        response.raise_for_status() # Raises HTTPError for bad responses (4xx or 5xx)
+                        # Raise exception for HTTP errors (4xx, 5xx)
+                        response.raise_for_status()
                         return await response.json()
+
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 logger.warning(f'Request failed: {e}. Retrying...')
                 retries += 1
+
                 if retries >= max_retries:
                     logger.error("Max retries exceeded for non-streaming request.")
                     return 'indeterminate'
+
+                # Exponential backoff sleep
                 sleep_time = min_sleep_time * (backoff_factor ** (retries - 1))
                 await asyncio.sleep(sleep_time)
+
         return 'indeterminate'
-    
+
     async def _execute_request_stream(self, request_data: dict, max_retries: int):
         """
-        Executes a streaming HTTP request and yields the raw content chunks.
-        The session is kept alive for the duration of the stream.
+        Execute a streaming HTTP request to the LLM API.
+
+        This method handles streaming communication with the LLM provider,
+        yielding raw content chunks as they're received. The session is kept
+        alive for the entire duration of the stream.
+
+        Args:
+            request_data (dict): The request payload formatted for the specific
+                LLM API. Will be modified to include stream=True.
+            max_retries (int, optional): Maximum number of retry attempts.
+                Defaults to 2.
+
+        Yields:
+            bytes: Raw content chunks from the streaming response
+
+        Error Handling:
+            - Retries failed requests with exponential backoff
+            - Yields error message as JSON bytes if all retries fail
+            - Maintains session throughout the streaming process
+
+        Note:
+            This method yields raw bytes that need to be decoded and parsed
+            by the calling method. The streaming format follows Server-Sent
+            Events (SSE) protocol.
         """
         if max_retries is None:
             max_retries = 2
-        
+
         retries = 0
         backoff_factor = 2
         min_sleep_time = 3
-        
+
+        # Enable streaming in request
         request_data["stream"] = True
         headers = {**self.model_configs.headers, "Accept": "text/event-stream"}
 
@@ -259,67 +523,220 @@ class LLM(AsyncLLMPipeline):
                         timeout=self.max_timeout_per_request
                     ) as response:
                         response.raise_for_status()
+
                         # Yield chunks while the session is active
                         async for chunk in response.content:
                             yield chunk
-                        # Once the stream is consumed, we are done. Exit the retry loop.
+
+                        # Stream consumed successfully, exit retry loop
                         return
+
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 logger.warning(f'Stream request failed: {e}. Retrying...')
                 retries += 1
+
                 if retries >= max_retries:
                     logger.error("Max retries exceeded for streaming request.")
-                    yield b'{"error": "Max retries exceeded"}' # Yield an error message
+                    # Yield error message as bytes for consistency
+                    yield b'{"error": "Max retries exceeded"}'
                     return
+
+                # Exponential backoff sleep
                 sleep_time = min_sleep_time * (backoff_factor ** (retries - 1))
                 await asyncio.sleep(sleep_time)
 
-    # REFACTORED: agenerate method is now much simpler
-    async def agenerate(self, user_prompt, max_retries: int = None):
+    async def agenerate(self, user_prompt: str, max_retries: int = None):
+        """
+        Generate a non-streaming response from the LLM.
+
+        This method prepares the message format, sends the request to the LLM API,
+        and returns the complete response once it's fully generated.
+
+        Args:
+            user_prompt (str): The input prompt to send to the LLM
+            max_retries (int, optional): Maximum number of retry attempts for
+                failed requests. Defaults to 2.
+
+        Returns:
+            Union[dict, str]: The complete response from the LLM API, or
+                'indeterminate' if all retry attempts fail
+
+        Example:
+            >>> llm = LLM(model="gpt-4")
+            >>> response = await llm.agenerate("Hello, how are you?")
+            >>> print(response['choices'][0]['message']['content'])
+            "I'm doing well, thank you!"
+
+        Note:
+            This is a non-streaming method that waits for the complete response
+            before returning. For real-time responses, use agenerate_stream().
+        """
         messages = self._prepare_messages(user_prompt)
         request_data = self.model_configs.message_formatter(messages)
         return await self._execute_request_non_stream(request_data, max_retries)
 
-    # REFACTORED: agenerate_stream is also simpler and more robust
-    async def agenerate_stream(self,
-                               user_prompt,
-                               max_retries: int = None):
-        
+    async def agenerate_stream(self, user_prompt: str, max_retries: int = None):
+        """
+        Generate a streaming response from the LLM with real-time output.
+
+        This method sends a streaming request to the LLM API and yields response
+        chunks as they're received, providing real-time output. It handles the
+        Server-Sent Events (SSE) protocol parsing automatically.
+
+        Args:
+            user_prompt (str): The input prompt to send to the LLM
+            max_retries (int, optional): Maximum number of retry attempts for
+                failed requests. Defaults to 2.
+
+        Yields:
+            str: Individual text chunks from the LLM response as they're generated
+
+        Example:
+            >>> llm = LLM(model="gpt-4", stream=True)
+            >>> async for chunk in llm.agenerate_stream("Tell me a story"):
+            ...     print(chunk, end="", flush=True)
+            Once upon a time...
+
+        Streaming Protocol:
+            - Uses Server-Sent Events (SSE) format
+            - Ignores incomplete chunks and JSON decode errors
+            - Stops yielding when "data: [DONE]" is received
+            - Each yield contains only the text content delta
+
+        Error Handling:
+            - Failed requests are handled with exponential backoff
+            - Incomplete chunks are silently ignored
+            - Maximum retries prevent infinite loops
+
+        Performance:
+            - Lower time-to-first-token (TTFT) compared to non-streaming
+            - Better user experience for long responses
+            - Same error handling and retry logic as non-streaming
+        """
         messages = self._prepare_messages(user_prompt)
         request_data = self.model_configs.message_formatter(messages)
-        
-        # The new executor handles the session and yields raw chunks
+
+        # Execute streaming request and parse response chunks
         async for chunk in self._execute_request_stream(request_data, max_retries):
-            # The parsing logic remains here, acting on the yielded chunks
+            # Decode chunk and ignore errors
             chunk_line = chunk.decode('utf-8', errors='ignore').strip()
-            if chunk_line.startswith("data: "):
-                if chunk_line == "data: [DONE]":
-                    break
-                try:
-                    data_str = chunk_line[6:]
-                    data = json.loads(data_str)
-                    if data.get("choices") and data["choices"][0].get("delta", {}).get("content"):
-                        yield data["choices"][0]["delta"]["content"]
-                except json.JSONDecodeError:
-                    # This can happen if the chunk is incomplete, just continue
-                    continue
-                
-    def batch_generate(self,
-                      user_prompts):
+
+            # Process only data lines from SSE protocol
+            if not chunk_line.startswith("data: "):
+                continue
+
+            # End of stream marker
+            if chunk_line == "data: [DONE]":
+                break
+
+            try:
+                # Extract JSON data from SSE line
+                data_str = chunk_line[6:]  # Remove "data: " prefix
+                data = json.loads(data_str)
+
+                # Extract and yield content delta if present
+                if (data.get("choices") and
+                    len(data["choices"]) > 0 and
+                    data["choices"][0].get("delta", {}).get("content")):
+                    yield data["choices"][0]["delta"]["content"]
+
+            except json.JSONDecodeError:
+                # Ignore malformed chunks (common with partial SSE data)
+                continue
+
+    def batch_generate(self, user_prompts):
         """
-        Override batch_generate to handle streaming vs non-streaming.
-        This implementation is correct and does not need changes.
+        Override batch_generate to handle streaming vs non-streaming modes.
+
+        This method adapts the batch processing behavior based on the stream
+        setting of the current instance. When streaming is enabled, it returns
+        generators for each prompt. When streaming is disabled, it uses the
+        parent class's batch processing.
+
+        Args:
+            user_prompts (Union[str, List[str]]): A single prompt string or
+                list of prompt strings to process
+
+        Returns:
+            Union[List[AsyncGenerator], List[str]]:
+                - If streaming enabled: List of async generators for each prompt
+                - If streaming disabled: List of completed responses
+
+        Example:
+            >>> llm_stream = LLM(stream=True)
+            >>> generators = llm_stream.batch_generate(["Hello", "How are you?"])
+            >>>
+            >>> llm_non_stream = LLM(stream=False)
+            >>> responses = llm_non_stream.batch_generate(["Hello", "How are you?"])
+
+        Note:
+            When streaming is enabled, each returned generator must be
+            awaited to get the actual chunks. The generators are independent
+            and can be consumed in parallel or sequentially.
         """
         if self.stream:
+            # Return generators for each prompt when streaming is enabled
             return [self.agenerate_stream(prompt) for prompt in user_prompts]
         else:
+            # Use parent class batch processing for non-streaming mode
             return super().batch_generate(user_prompts)
 
 
 class LLMWithTools:
     """
-    LLM class with standard tool calling capabilities.
-    Refactored to leverage the cleaner base LLM class.
+    LLM wrapper with comprehensive tool calling and streaming support.
+
+    This class extends the base LLM functionality with the ability to call external
+    tools/functions based on user queries. It supports both streaming and non-streaming
+    modes, automatic tool execution, and multi-turn conversations with tool context.
+
+    Key Features:
+        - Automatic tool calling based on user query analysis
+        - Streaming responses with real-time tool execution feedback
+        - Support for multiple tools with complex parameter schemas
+        - Context-aware tool selection and execution
+        - Error handling and retry logic for tool failures
+        - Conversation persistence with tool results
+
+    Attributes:
+        _original_system_prompt (str): Original system prompt before tool modifications
+        tools (list): List of tool schema definitions
+        tool_choice (str): Tool selection strategy ("auto", "none", or specific tool)
+        llm (LLM): Internal LLM instance for generation
+        available_functions (dict): Mapping of tool names to executable functions
+
+    Example:
+        >>> tools = [{
+        ...     "name": "get_weather",
+        ...     "description": "Get current weather",
+        ...     "parameters": {
+        ...         "type": "object",
+        ...         "properties": {
+        ...             "location": {"type": "string", "description": "City name"}
+        ...         },
+        ...         "required": ["location"]
+        ...     }
+        ... }]
+        >>>
+        >>> llm_tools = LLMWithTools(
+        ...     tools=tools,
+        ...     stream=True,
+        ...     model="gpt-4"
+        ... )
+        >>>
+        >>> def get_weather(location: str):
+        ...     return f"Weather in {location}: 72°F, sunny"
+        >>>
+        >>> llm_tools.register_function("get_weather", get_weather)
+        >>>
+        >>> # Use with streaming tool execution
+        >>> async for chunk in llm_tools.generate_with_tool_execution_stream(
+        ...     "What's the weather in San Francisco?"
+        ... ):
+        ...     if chunk["type"] == "content":
+        ...         print(chunk["content"], end="")
+        ...     elif chunk["type"] == "tool_result":
+        ...         print(f"\nTool result: {chunk['result']}")
     """
 
     def __init__(self,
@@ -330,20 +747,67 @@ class LLMWithTools:
                  tools: list = None,
                  tool_choice: str = "auto",
                  stream: bool = False):
+        """
+        Initialize the LLMWithTools instance.
+
+        This method sets up the LLM with tool calling capabilities by enhancing
+        the system prompt with tool usage instructions and creating an internal
+        LLM instance configured for tool calling.
+
+        Args:
+            system_prompt (str, optional): Base system prompt for conversation.
+                This will be enhanced with tool usage instructions.
+            few_shot_examples (list, optional): List of few-shot examples for
+                conversation formatting. Should be in [[user, assistant], ...] format.
+            model (str, optional): Model identifier to use. Must support tool calling.
+                Defaults to project default model.
+            max_timeout_per_request (int, optional): HTTP request timeout in seconds.
+                Longer timeouts may be needed for complex tool workflows.
+            tools (list, optional): List of tool schema definitions. Each tool should
+                include name, description, and parameters schema.
+            tool_choice (str, optional): Tool selection strategy.
+                "auto": Model decides which tools to use
+                "none": No tools will be used
+                "tool_name": Force use of specific tool
+                Defaults to "auto".
+            stream (bool, optional): Enable streaming responses with real-time
+                tool execution feedback. Defaults to False.
+
+        Tool Schema Format:
+            Each tool should follow this structure:
+            {
+                "name": "tool_name",
+                "description": "What the tool does",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "param1": {
+                            "type": "string",
+                            "description": "Parameter description"
+                        }
+                    },
+                    "required": ["param1"]
+                }
+            }
+
+        Note:
+            The system prompt is automatically enhanced with tool usage instructions.
+            Tool functions must be registered using register_function() before use.
+        """
         
-        # The original system prompt is stored before being modified
+        # Store the original system prompt before tool modifications
         self._original_system_prompt = system_prompt or default_config.default_system_prompt
         self.tools = tools or []
         self.tool_choice = tool_choice
-        
-        # Build the enhanced system prompt for tools
+
+        # Build enhanced system prompt with tool usage instructions
         tool_system_prompt = self._build_tool_system_prompt()
         if self.tools:
             combined_system_prompt = f"{self._original_system_prompt}\n\n{tool_system_prompt}"
         else:
             combined_system_prompt = self._original_system_prompt
 
-        # Initialize the underlying LLM instance with the combined prompt
+        # Initialize the underlying LLM instance with enhanced prompt
         self.llm = LLM(
             system_prompt=combined_system_prompt,
             few_shot_examples=few_shot_examples,
@@ -351,16 +815,42 @@ class LLMWithTools:
             max_timeout_per_request=max_timeout_per_request,
             stream=stream
         )
-        
+
+        # Initialize available functions registry
         self.available_functions = {}
 
     @property
     def few_shot_examples(self):
-        """Get the few_shot_examples from the internal LLM instance."""
+        """
+        Get the few_shot_examples from the internal LLM instance.
+
+        Returns:
+            list: List of few-shot examples in [[user, assistant], ...] format
+        """
         return self.llm.few_shot_examples
 
     def _build_tool_system_prompt(self):
-        """Build system prompt that explains tool usage to the LLM."""
+        """
+        Build comprehensive system prompt for tool usage instructions.
+
+        This method generates detailed instructions for the LLM on how to use
+        the available tools, including examples, formatting requirements, and
+        best practices for tool selection and execution.
+
+        Returns:
+            str: Enhanced system prompt with tool usage instructions
+
+        Generated Content:
+            - Tool descriptions with parameter details
+            - Usage examples for different query types
+            - JSON formatting requirements for tool calls
+            - Best practices and rules for tool selection
+            - Error handling guidelines
+
+        Note:
+            This prompt is designed to work with models that support tool calling
+            through structured JSON responses rather than native tool calling APIs.
+        """
         if not self.tools:
             return ""
 
@@ -467,11 +957,40 @@ Format your response as either:
 
     def register_function(self, tool_name: str, function):
         """
-        Register a Python function that can be called when the LLM requests to use a tool.
+        Register a Python function for tool execution.
+
+        This method maps a tool name (defined in the tool schema) to an actual
+        Python function that will be executed when the LLM requests to use that tool.
 
         Args:
-            tool_name: Name of the tool as defined in the tool schema
-            function: Python function to execute when tool is called
+            tool_name (str): Name of the tool as defined in the tool schema.
+                Must match exactly with the tool name in the schema.
+            function (callable): Python function to execute when the tool is called.
+                The function signature should match the tool's parameters.
+
+        Function Requirements:
+            - Must accept keyword arguments matching the tool's parameters
+            - Should handle errors gracefully and return meaningful results
+            - Can be synchronous or asynchronous
+            - Should return serializable results (strings, dicts, lists, etc.)
+
+        Example:
+            >>> def get_weather(location: str, units: str = "metric"):
+            ...     # Weather API logic here
+            ...     return {"temperature": 72, "conditions": "sunny"}
+            >>>
+            >>> llm_tools.register_function("get_weather", get_weather)
+
+        Error Handling:
+            - If the tool name doesn't exist in the schema, the function will
+              never be called (LLM won't know about it)
+            - If function execution fails, an error result is returned to the LLM
+            - Missing required parameters will result in execution errors
+
+        Note:
+            Functions should be registered before making requests that might
+            require those tools. Function registration is not persistent across
+            instance creation.
         """
         self.available_functions[tool_name] = function
 
@@ -684,19 +1203,63 @@ Format your response as either:
             }
 
     async def generate_with_tool_execution(self,
-                                         user_prompt,
+                                         user_prompt: str,
                                          max_retries: int = None,
                                          max_tool_iterations: int = 3):
         """
-        Generate response and automatically execute tools if requested.
+        Generate response with automatic tool execution (non-streaming).
+
+        This is the primary method for tool-enabled conversations. It analyzes
+        the user's prompt, determines if tools are needed, executes them if
+        requested, and provides a final response incorporating tool results.
 
         Args:
-            user_prompt: User's input prompt
-            max_retries: Maximum number of retries for API calls
-            max_tool_iterations: Maximum number of tool execution iterations
+            user_prompt (str): The user's input prompt/question
+            max_retries (int, optional): Maximum retry attempts for failed API calls.
+                Defaults to 2.
+            max_tool_iterations (int, optional): Maximum number of tool execution
+                cycles. Prevents infinite loops when tools trigger more tool calls.
+                Defaults to 3.
 
         Returns:
-            Final response after tool execution
+            dict: Response object with the following structure:
+                {
+                    "type": "text",           # Response type
+                    "content": "Response text", # The actual response
+                    "tools_used": [],         # List of tools that were called
+                    "tool_calls_made": 0      # Number of tool execution cycles
+                }
+                OR
+                {
+                    "type": "error",
+                    "content": "Error description"
+                }
+
+        Execution Flow:
+            1. Analyze user prompt for tool requirements
+            2. If tools needed, execute them with provided arguments
+            3. Incorporate tool results into conversation context
+            4. Generate final response based on tool results
+            5. Repeat up to max_tool_iterations if more tools are needed
+
+        Error Handling:
+            - Tool execution failures are included in context
+            - API call failures trigger retries with exponential backoff
+            - Max iteration limits prevent infinite loops
+            - Graceful degradation when tools are unavailable
+
+        Example:
+            >>> llm_tools = LLMWithTools(tools=weather_tools)
+            >>> llm_tools.register_function("get_weather", get_weather_func)
+            >>> response = await llm_tools.generate_with_tool_execution(
+            ...     "What's the weather like in New York?"
+            ... )
+            >>> print(response["content"])
+            "The weather in New York is currently 72°F and sunny."
+
+        Note:
+            This is a non-streaming method. For real-time tool execution
+            feedback, use generate_with_tool_execution_stream().
         """
         current_prompt = user_prompt
         iteration = 0
@@ -737,19 +1300,86 @@ Format your response as either:
         return {"type": "error", "content": "Maximum tool iterations exceeded"}
 
     async def generate_with_tool_execution_stream(self,
-                                                 user_prompt,
+                                                 user_prompt: str,
                                                  max_retries: int = None,
                                                  max_tool_iterations: int = 3):
         """
-        Generate streaming response and automatically execute tools if requested.
+        Generate streaming response with automatic tool execution.
+
+        This method provides real-time streaming output during both LLM generation
+        and tool execution. It yields different types of chunks to allow for
+        detailed progress tracking and user feedback.
 
         Args:
-            user_prompt: User's input prompt
-            max_retries: Maximum number of retries for API calls
-            max_tool_iterations: Maximum number of tool execution iterations
+            user_prompt (str): The user's input prompt/question
+            max_retries (int, optional): Maximum retry attempts for failed API calls.
+                Defaults to 2.
+            max_tool_iterations (int, optional): Maximum number of tool execution
+                cycles. Prevents infinite loops. Defaults to 3.
 
         Yields:
-            Streaming response chunks and tool execution results
+            dict: Stream chunks with different types:
+                {
+                    "type": "content",
+                    "content": "Text chunk from LLM"
+                }
+                {
+                    "type": "tool_calls",
+                    "content": "Accumulated content",
+                    "tool_calls": [{"name": "tool", "arguments": "{}"}]
+                }
+                {
+                    "type": "tool_execution_start",
+                    "content": "Executing tools..."
+                }
+                {
+                    "type": "tool_result",
+                    "tool_name": "tool_name",
+                    "result": "Tool output",
+                    "status": "success"
+                }
+                {
+                    "type": "final_response_start",
+                    "content": "Generating final response..."
+                }
+                {
+                    "type": "error",
+                    "content": "Error description"
+                }
+
+        Streaming Workflow:
+            1. Stream initial LLM response (tool calls or content)
+            2. If tools are requested, yield tool call information
+            3. Execute tools and yield execution progress
+            4. Yield individual tool results
+            5. Stream final response incorporating tool results
+            6. Repeat if additional tools are needed
+
+        Performance Benefits:
+            - Immediate feedback with first token streaming
+            - Real-time tool execution status updates
+            - Better user experience for long-running operations
+            - Progressive content display
+
+        Example:
+            >>> async for chunk in llm_tools.generate_with_tool_execution_stream(
+            ...     "What's the weather in Tokyo?"
+            ... ):
+            ...     if chunk["type"] == "content":
+            ...         print(chunk["content"], end="", flush=True)
+            ...     elif chunk["type"] == "tool_calls":
+            ...         print(f"\n[Calling tools: {[tc['name'] for tc in chunk['tool_calls']]}]")
+            ...     elif chunk["type"] == "tool_result":
+            ...         print(f"\n[Tool result for {chunk['tool_name']}: {chunk['result']}]")
+
+        Fallback Behavior:
+            If streaming is disabled on the instance, this method automatically
+            falls back to the non-streaming version and yields a single response.
+
+        Error Handling:
+            - Tool execution errors are yielded as error chunks
+            - Streaming errors are reported and execution stops
+            - Maximum iteration limits prevent infinite loops
         """
         if not self.stream:
             # If streaming is not enabled, use the non-streaming method
