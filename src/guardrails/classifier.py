@@ -3,6 +3,7 @@ Simple rule-based classifier for guardrails (PoC implementation).
 """
 
 import re
+import time
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
 from enum import Enum
@@ -29,7 +30,6 @@ class ClassificationResult:
     confidence: float
     reasoning: str
     latency_ms: float
-
 
 class RuleBasedClassifier:
     """Simple rule-based classifier for PoC guardrails."""
@@ -274,13 +274,103 @@ class RuleBasedClassifier:
             "policy_keywords": len(self.rules["policy_keywords"]),
             "product_categories": len(self.rules["product_categories"]),
         }
+    
+class MLClassifier:
+    """
+    Simple ML-based classifier for guardrails.
+    """
+
+    def __init__(self):
+        import joblib
+        self.classifier = joblib.load("./data/models/guardrail_svc_classifier.joblib")
+        self.vectorizer = joblib.load("./data/models/guardrail_tfidf_vectorizer.joblib")
+
+    def _get_guardrail_label(self, prediction: str) -> GuardrailLabel:
+
+        """Map prediction string to GuardrailLabel."""
+
+        #possible predictions = ['shopping_keywords', 'policy_keywords','product_categories','inappropriate_content','injection_attempts','out_of_scope']
+
+        if prediction == "inappropriate_content":
+            return GuardrailLabel.INAPPROPRIATE
+        elif prediction == "out_of_scope":
+            return GuardrailLabel.OUT_OF_SCOPE
+        elif prediction == "injection_attempts":
+            return GuardrailLabel.PROMPT_INJECTION
+        else:
+            return GuardrailLabel.APPROPRIATE
+
+    @track_latency("guardrail_ml_classify")
+    def classify(self, text: str) -> ClassificationResult:
+        """
+        Classify text using ML-based approach.
+
+        Args:
+            text: Input text to classify
+
+        Returns:
+            ClassificationResult with label, confidence, and reasoning
+        """
+        start_time = time.time()
+
+        X_vectorized = self.vectorizer.transform([text])
+        prediction = self.classifier.predict(X_vectorized)[0]
+        confidence = max(self.classifier.decision_function(X_vectorized)[0])
+
+        label = self._get_guardrail_label(prediction)
+        latency_ms = (time.time() - start_time) * 1000
+        
+        return ClassificationResult(
+            label=label,
+            confidence=float(confidence),
+            reasoning=f"ML-based classification predicted: {prediction}",
+            latency_ms=latency_ms
+        )
+    
+    def batch_classify(self, texts: List[str]) -> List[ClassificationResult]:
+        """Classify multiple texts."""
+        results = []
+        X_vectorized = self.vectorizer.transform(texts)
+        predictions = self.classifier.predict(X_vectorized)
+        confidences = self.classifier.decision_function(X_vectorized)
+
+        for i, text in enumerate(texts):
+            prediction = predictions[i]
+            confidence = max(confidences[i])
+
+            label = self._get_guardrail_label(prediction)
+
+            results.append(ClassificationResult(
+                label=label,
+                confidence=float(confidence),
+                reasoning=f"ML-based classification predicted: {prediction}",
+                latency_ms=0.0  # Latency not tracked per item in batch
+            ))
+
+        metrics.add_metric("guardrail_ml_batch_size", len(texts))
+        return results
+
+    def get_classification_stats(self) -> Dict[str, any]:
+        """Get classifier statistics."""
+        try:
+            support_vector_count = int(self.classifier.n_support_.sum()) if hasattr(self.classifier, 'n_support_') else "unknown"
+        except:
+            support_vector_count = "unknown"
+
+        return {
+            "type": "ml_based",
+            "model_type": "SVC",
+            "vectorizer_type": "TF-IDF",
+            "feature_count": len(self.vectorizer.vocabulary_) if hasattr(self.vectorizer, 'vocabulary_') else "unknown",
+            "support_vector_count": support_vector_count,
+        }
 
 
 # Global classifier instance
-guardrail_classifier = RuleBasedClassifier()
+# guardrail_classifier = RuleBasedClassifier()
+guardrail_classifier = MLClassifier()
 
-
-def get_guardrail_classifier() -> RuleBasedClassifier:
+def get_guardrail_classifier() -> RuleBasedClassifier | MLClassifier:
     """Get the global guardrail classifier instance."""
     return guardrail_classifier
 
