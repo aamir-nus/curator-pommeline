@@ -7,7 +7,7 @@ from typing import List
 from fastapi import APIRouter, HTTPException
 
 from ..models import GuardrailRequest, GuardrailResponse, ErrorResponse
-from src.guardrails.classifier import get_guardrail_classifier
+from src.guardrails.classifier import get_guardrail_classifier, GuardrailLabel
 from src.utils.logger import get_logger
 from src.utils.metrics import metrics
 
@@ -36,7 +36,7 @@ async def classify_text(request: GuardrailRequest):
         result = classifier.classify(request.text)
 
         # Determine if content is appropriate
-        is_appropriate = result.label == "appropriate"
+        is_appropriate = result.label == GuardrailLabel.APPROPRIATE
 
         response = GuardrailResponse(
             label=result.label,
@@ -104,7 +104,7 @@ async def batch_classify_texts(texts: List[str]):
         # Convert to response format
         response_results = []
         for i, result in enumerate(results):
-            is_appropriate = result.label == "appropriate"
+            is_appropriate = result.label == GuardrailLabel.APPROPRIATE
             response_results.append({
                 "text_index": i,
                 "text_preview": texts[i][:100] + "..." if len(texts[i]) > 100 else texts[i],
@@ -198,24 +198,41 @@ async def get_guardrail_stats():
     try:
         stats = classifier.get_classification_stats()
 
-        return {
-            "classifier_type": stats["type"],
-            "configuration": {
-                "injection_patterns": stats["injection_patterns"],
-                "inappropriate_patterns": stats["inappropriate_patterns"],
-                "out_of_scope_patterns": stats["out_of_scope_patterns"]
-            },
-            "rule_categories": {
-                "shopping_keywords_count": stats["shopping_keywords"],
-                "policy_keywords_count": stats["policy_keywords"],
-                "product_categories_count": stats["product_categories"]
-            },
-            "performance": {
-                "classification_speed_ms": "Variable - depends on text length and patterns",
-                "memory_usage": "Low - rule-based approach",
-                "scalability": "High - simple pattern matching"
+        if stats["type"] == "ml_based":
+            return {
+                "classifier_type": stats["type"],
+                "configuration": {
+                    "model_type": stats["model_type"],
+                    "vectorizer_type": stats["vectorizer_type"],
+                    "feature_count": stats["feature_count"],
+                    "support_vector_count": stats["support_vector_count"]
+                },
+                "performance": {
+                    "classification_speed_ms": "Fast - typically 1-5ms per classification",
+                    "memory_usage": "Medium - loaded models in memory",
+                    "scalability": "High - optimized for batch processing"
+                }
             }
-        }
+        else:
+            # Rule-based classifier stats
+            return {
+                "classifier_type": stats["type"],
+                "configuration": {
+                    "injection_patterns": stats["injection_patterns"],
+                    "inappropriate_patterns": stats["inappropriate_patterns"],
+                    "out_of_scope_patterns": stats["out_of_scope_patterns"]
+                },
+                "rule_categories": {
+                    "shopping_keywords_count": stats["shopping_keywords"],
+                    "policy_keywords_count": stats["policy_keywords"],
+                    "product_categories_count": stats["product_categories"]
+                },
+                "performance": {
+                    "classification_speed_ms": "Variable - depends on text length and patterns",
+                    "memory_usage": "Low - rule-based approach",
+                    "scalability": "High - simple pattern matching"
+                }
+            }
 
     except Exception as e:
         logger.error(f"Error getting guardrail stats: {e}")
