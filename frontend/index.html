@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Curator Pommeline Chatbot</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="chat-wrapper">
+        <div class="header">
+            <h1>Curator Pommeline Chatbot </h1>
+            <div class="subtitle">AI-powered shopping assistant with product search and knowledge retrieval</div>
+        </div>
+
+        <div class="chat-container">
+            <div class="messages-container" id="messagesContainer">
+                <div class="message assistant">
+                    <div class="message-avatar">C</div>
+                    <div class="message-content">
+                        Hello! I'm your AI shopping assistant. I can help you find products, compare options, and answer questions about features and policies. What are you looking for today?
+                    </div>
+                </div>
+            </div>
+
+            <div class="typing-indicator" id="typingIndicator">
+                <div class="typing-dots">
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                </div>
+            </div>
+
+            <div class="input-container">
+                <div class="input-wrapper">
+                    <textarea
+                        id="messageInput"
+                        placeholder="Ask me about products, prices, features..."
+                        rows="1"
+                    ></textarea>
+                </div>
+                <button id="sendButton">Send</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="status-indicator">
+        <div class="status-dot"></div>
+        <span id="statusText">Connected</span>
+    </div>
+
+    <script src="chatbot.js"></script>
+</body>
+</html>
