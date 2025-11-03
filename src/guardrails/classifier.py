@@ -367,8 +367,8 @@ class MLClassifier:
 
 
 # Global classifier instance
-# guardrail_classifier = RuleBasedClassifier()
-guardrail_classifier = MLClassifier()
+guardrail_classifier = RuleBasedClassifier()
+# guardrail_classifier = MLClassifier()
 
 def get_guardrail_classifier() -> RuleBasedClassifier | MLClassifier:
     """Get the global guardrail classifier instance."""

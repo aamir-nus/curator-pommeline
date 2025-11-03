@@ -5,6 +5,7 @@ Multi-turn chatbot orchestrator with LLM-based tool calling and streaming suppor
 import time
 import asyncio
 import json
+import re
 from pathlib import Path
 from typing import Dict, List, Any, Optional, AsyncGenerator
 from dataclasses import dataclass, asdict
@@ -63,6 +64,7 @@ class MultiTurnChatbot:
     - OpenAI-compatible response format
     - Tool execution (retrieve_knowledge, search_products)
     - Latency tracking (TTFT and total generation time)
+    - URL masking system for enhanced security
     """
 
     def __init__(self):
@@ -74,17 +76,21 @@ class MultiTurnChatbot:
         # Load system prompt
         system_prompt = self._load_system_prompt()
 
+        # Link masking system
+        self.link_masks: Dict[str, str] = {}  # mask -> actual_url mapping
+        self.current_session_id: Optional[str] = None
+
         # Define tool schemas for LLM
         tools_schema = [
             {
                 "name": "retrieve_knowledge",
-                "description": "Search the knowledge base for product information, policies, and general information. Use this when you need factual information about products, return policies, or general knowledge.",
+                "description": "Search the knowledge base for SHOPPING-RELATED information only. Use this ONLY for product information, return policies, shipping policies, discount information, warranty details, or general shopping advice. DO NOT use this for non-shopping topics like weather, news, general knowledge questions, or anything outside the shopping domain.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "query": {
                             "type": "string",
-                            "description": "Search query for the knowledge base"
+                            "description": "Search query for the knowledge base (MUST be shopping-related)"
                         },
                         "top_k": {
                             "type": "integer",
@@ -108,13 +114,13 @@ class MultiTurnChatbot:
             },
             {
                 "name": "search_products",
-                "description": "Search the product inventory for specific items with pricing and availability. Use this when looking for specific products to buy or compare.",
+                "description": "Search the product inventory for specific items with pricing and availability. Use this ONLY when looking for specific products that users want to purchase, compare, or get pricing information for. Include current date information in responses. Do NOT use this for general information searches.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "query": {
                             "type": "string",
-                            "description": "Product search query"
+                            "description": "Product search query for items users want to buy"
                         },
                         "category": {
                             "type": "string",
@@ -122,11 +128,11 @@ class MultiTurnChatbot:
                         },
                         "min_price": {
                             "type": "number",
-                            "description": "Minimum price filter"
+                            "description": "Minimum price filter for purchasing decisions"
                         },
                         "max_price": {
                             "type": "number",
-                            "description": "Maximum price filter"
+                            "description": "Maximum price filter for purchasing decisions"
                         },
                         "brand": {
                             "type": "string",
@@ -154,6 +160,56 @@ class MultiTurnChatbot:
         self.tools_schema = tools_schema
 
         logger.info(f"MultiTurnChatbot initialized with default ingestion_id: {self.default_ingestion_id}")
+
+    def _clear_link_masks(self, session_id: str):
+        """Clear link masks for a new user request."""
+        # Reset link masks for each new request
+        if session_id in self.sessions:
+            self.sessions[session_id].link_masks = {}
+
+    def _create_link_mask(self) -> str:
+        """Create a unique link mask."""
+        mask_id = len(self.link_masks) + 1
+        return f"<link_{mask_id}>"
+
+    def _mask_urls_in_text(self, text: str, session_id: str) -> str:
+        """Replace URLs with masks in text."""
+        if session_id not in self.sessions:
+            return text
+
+        # Initialize link masks for session if not exists
+        if not hasattr(self.sessions[session_id], 'link_masks'):
+            self.sessions[session_id].link_masks = {}
+
+        link_masks = self.sessions[session_id].link_masks
+
+        # URL pattern - matches http and https URLs
+        url_pattern = r'https?://[^\s<>"]+'
+
+        def replace_url(match):
+            original_url = match.group(0)
+            if original_url not in link_masks:
+                mask = self._create_link_mask()
+                link_masks[mask] = original_url
+                return mask
+            else:
+                return link_masks[original_url]
+
+        masked_text = re.sub(url_pattern, replace_url, text)
+        return masked_text
+
+    def _unmask_urls_in_text(self, text: str, session_id: str) -> str:
+        """Replace masks with actual URLs in text."""
+        if session_id not in self.sessions or not hasattr(self.sessions[session_id], 'link_masks'):
+            return text
+
+        link_masks = self.sessions[session_id].link_masks
+
+        # Replace masks with actual URLs
+        for mask, actual_url in link_masks.items():
+            text = text.replace(mask, actual_url)
+
+        return text
 
     def _load_system_prompt(self) -> str:
         """Load system prompt from file."""
@@ -297,6 +353,10 @@ class MultiTurnChatbot:
             # Update session activity
             session.update_activity()
 
+            # Set current session for link masking and clear previous masks
+            self.current_session_id = session_id
+            self._clear_link_masks(session_id)
+
             # Add user message to session
             user_message = ChatMessage(
                 role="user",
@@ -361,9 +421,11 @@ class MultiTurnChatbot:
                     first_token_time = current_time
 
                 if chunk["type"] == "content":
+                    # Unmask URLs in content before sending to user
+                    unmasked_content = self._unmask_urls_in_text(chunk["content"], session_id)
                     yield {
                         "type": "content",
-                        "content": chunk["content"],
+                        "content": unmasked_content,
                         "session_id": session_id,
                         "ingestion_id": session.ingestion_id,
                         "timestamp": current_time,
@@ -521,8 +583,10 @@ class MultiTurnChatbot:
             # Format results for LLM consumption
             results = []
             for doc in response.results:
+                # Mask URLs in content before passing to LLM
+                masked_content = self._mask_urls_in_text(doc.content, self.current_session_id) if self.current_session_id else doc.content
                 results.append({
-                    "content": doc.content,
+                    "content": masked_content,
                     "source_file": doc.source_file,
                     "score": doc.score,
                     "metadata": doc.metadata
@@ -562,16 +626,28 @@ class MultiTurnChatbot:
             # Format results for LLM consumption
             products = []
             for product in response.products:
+                # Mask URLs in description and specifications before passing to LLM
+                masked_description = self._mask_urls_in_text(product.description, self.current_session_id) if self.current_session_id and product.description else product.description
+                masked_specifications = {}
+                if product.specifications and self.current_session_id:
+                    for key, value in product.specifications.items():
+                        if isinstance(value, str):
+                            masked_specifications[key] = self._mask_urls_in_text(value, self.current_session_id)
+                        else:
+                            masked_specifications[key] = value
+                else:
+                    masked_specifications = product.specifications
+
                 products.append({
                     "id": product.id,
                     "name": product.name,
-                    "description": product.description,
+                    "description": masked_description,
                     "price": product.price,
                     "brand": product.brand,
                     "category": product.category,
                     "availability": product.availability,
                     "rating": product.rating,
-                    "specifications": product.specifications
+                    "specifications": masked_specifications
                 })
 
             return {
