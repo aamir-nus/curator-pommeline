@@ -65,7 +65,19 @@ class MockProductAPI:
 
     def _generate_mock_products(self) -> List[Product]:
         """Generate mock product data."""
-        products = []
+        products, product_templates = [], []
+        try:
+            # Load from JSON file if available
+            data_path = Path(__file__).parent / "data" / "mock_inventory.json"
+
+            if data_path.exists():
+                with open(data_path, "r") as f:
+                    product_list = json.load(f)
+                    for item in product_list:
+                        products.append(Product(**item))
+                return products
+        except Exception as e:
+            logger.error(f"Error loading mock products from file: {e}")
 
         # Mock product templates
         product_templates = [
