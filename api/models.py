@@ -151,6 +151,45 @@ class BatchChatResponse(BaseModel):
     errors: List[str] = Field(default_factory=list)
 
 
+# Multi-turn Chat Models
+class MultiTurnChatRequest(BaseModel):
+    """Multi-turn chat request model."""
+    message: str = Field(..., description="User message", min_length=1, max_length=2000)
+    session_id: str = Field(..., description="Session identifier for conversation continuity")
+    ingestion_id: Optional[str] = Field(None, description="Ingestion ID for data isolation")
+    user_context: Optional[Dict[str, Any]] = Field(default_factory=dict, description="User context information")
+    debug: bool = Field(default=False, description="Enable debug output with tool execution details")
+
+
+class ChatChunk(BaseModel):
+    """Chat streaming chunk model compatible with OpenAI format."""
+    id: str = Field(..., description="Chunk identifier")
+    object: str = Field(default="chat.completion.chunk", description="Object type")
+    created: int = Field(..., description="Creation timestamp")
+    model: str = Field(..., description="Model name")
+    choices: List[Dict[str, Any]] = Field(..., description="Choice deltas")
+    usage: Optional[Dict[str, Any]] = Field(None, description="Token usage information")
+    session_id: str = Field(..., description="Session identifier")
+    ingestion_id: str = Field(..., description="Ingestion identifier")
+    finish_reason: Optional[str] = Field(None, description="Reason for completion")
+    ttft_ms: Optional[float] = Field(None, description="Time to first token in milliseconds")
+    tools_used: Optional[List[str]] = Field(None, description="List of tools used in this response")
+    debug_info: Optional[Dict[str, Any]] = Field(None, description="Debug information if debug mode enabled")
+
+
+class MultiTurnChatResponse(BaseModel):
+    """Multi-turn chat response metadata."""
+    session_id: str
+    ingestion_id: str
+    message_id: str
+    content: str
+    finish_reason: str
+    ttft_ms: float
+    total_latency_ms: float
+    tools_used: List[str] = Field(default_factory=list)
+    debug_info: Optional[Dict[str, Any]] = None
+
+
 # Tool Request/Response Models
 class RetrieveRequest(BaseModel):
     """Retrieve tool request model."""

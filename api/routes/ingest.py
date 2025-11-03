@@ -1,7 +1,7 @@
 """
 Data ingestion routes for processing and indexing documents.
 """
-
+import requests
 import time
 from pathlib import Path
 from typing import List
@@ -12,6 +12,7 @@ from ..models import IngestRequest, IngestResponse, ErrorResponse
 from src.ingestion.chunker import SemanticChunker
 from src.ingestion.unified_index_ingestion import UnifiedIndexIngestion
 from src.ingestion.vector_store import get_vector_store
+from src.tools.retrieve import RetrieveTool
 from src.utils.logger import get_logger
 from src.utils.metrics import metrics
 from src.utils.file_loader import load_documents_from_directory
@@ -38,7 +39,6 @@ def _clear_vectors_by_ingestion_id(ingestion_id: str, index_name: str):
         }
 
         # Using a direct HTTP request to Pinecone since the client might not support this filter
-        import requests
         response = requests.post(
             f"{settings.pinecone_host}/vectors/delete",
             json=delete_request,
@@ -252,7 +252,6 @@ async def perform_async_ingestion(source_path: str, file_pattern: str, rebuild_i
         path = Path(source_path)
         chunker = SemanticChunker(chunk_size=chunk_size)
         vector_store = get_vector_store()
-        hybrid_searcher = get_hybrid_searcher()
 
         # Process documents
         if path.is_file():
@@ -263,12 +262,6 @@ async def perform_async_ingestion(source_path: str, file_pattern: str, rebuild_i
         if chunks:
             # Add to vector store
             vector_store.add_documents(chunks)
-
-            # Rebuild index if requested
-            if rebuild_index:
-                hybrid_searcher.clear_index()
-                if vector_store.documents:
-                    hybrid_searcher.build_index(vector_store.documents)
 
         total_time = time.time() - start_time
         logger.info(f"Async ingestion completed in {total_time:.2f}s: {len(chunks)} chunks")
@@ -284,12 +277,10 @@ async def clear_vector_store():
         logger.info("Clearing vector store")
 
         vector_store = get_vector_store()
-        hybrid_searcher = get_hybrid_searcher()
 
         # Clear components
         documents_count = len(vector_store.documents)
         vector_store.clear()
-        hybrid_searcher.clear_index()
 
         logger.info(f"Cleared {documents_count} documents from vector store")
 
@@ -317,22 +308,27 @@ async def get_ingestion_status():
     """Get current ingestion status and statistics."""
     try:
         vector_store = get_vector_store()
-        hybrid_searcher = get_hybrid_searcher()
+        retrieve_tool = RetrieveTool()
 
         stats = vector_store.get_stats()
-        search_stats = hybrid_searcher.get_search_stats()
+
+        # Get ingest stats using the retrieve tool
+        ingest_stats = retrieve_tool.get_retrieve_stats()
 
         status = {
             "vector_store": {
-                "total_documents": stats["total_documents"],
-                "memory_usage_mb": stats["memory_usage_mb"],
-                "sources": stats["sources"]
+                "total_documents": stats.get("total_documents", 0),
+                "embedding_dimension": stats.get("embedding_dimension", 0),
+                "index_name": stats.get("index_name", ""),
+                "index_fullness": stats.get("index_fullness", 0),
+                "namespaces": stats.get("namespaces", {})
             },
             "search_index": {
-                "bm25_index_size": search_stats["bm25_index_size"],
-                "vector_store_size": search_stats["vector_store_size"]
+                "bm25_index_size": ingest_stats.get("bm25_index_size", 0),
+                "vector_store_size": ingest_stats.get("vector_store_size", 0)
             },
-            "ingestion_ready": stats["total_documents"] > 0
+            "ingestion_ready": stats.get("total_documents", 0) > 0,
+            "current_ingestion_id": settings.current_ingestion_id
         }
 
         return status

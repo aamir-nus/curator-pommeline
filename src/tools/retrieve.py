@@ -2,8 +2,13 @@
 RAG retrieval tool for knowledge base search.
 """
 
-from typing import List, Dict, Any, Optional
+import glob
+import hashlib
+import os
+from pathlib import Path
 from pydantic import BaseModel, Field
+from typing import List, Dict, Any, Optional
+
 import numpy as np
 import traceback
 
@@ -14,12 +19,8 @@ from ..utils.singletons import get_bm25_vectorizer_singleton
 from ..utils.logger import get_logger
 from ..utils.metrics import track_latency, metrics
 from ..config import settings
-import glob
-import os
-from pathlib import Path
 
 logger = get_logger("retrieve_tool")
-
 
 def get_latest_ingestion_id() -> str:
     """Auto-detect the latest ingestion ID from saved BM25 vectorizer files."""
@@ -425,7 +426,6 @@ class RetrieveTool:
         2. Different chunks with identical content (content hash collision)
         3. Dense/sparse variants of the same chunk
         """
-        import hashlib
         seen_docs = {}
         seen_content = {}
         deduplicated = []

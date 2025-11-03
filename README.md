@@ -100,80 +100,194 @@ The API will be available at `http://localhost:8000`
 
 ## API Usage
 
+### Multi-turn Chat (Primary Interface)
+
+#### Basic Chat Request
+
+```bash
+curl -X POST "http://localhost:8000/chat" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "What iPhones do you have available?",
+    "session_id": "user-session-123",
+    "debug": false
+  }'
+```
+
+#### Streaming Chat with Debug Information
+
+```bash
+curl -X POST "http://localhost:8000/chat" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "Tell me about MacBook features for students",
+    "session_id": "user-session-123",
+    "debug": true,
+    "ingestion_id": "44344f0d",
+    "user_context": {
+      "name": "Student User",
+      "preferences": ["price_sensitive", "portability"]
+    }
+  }'
+```
+
+#### Python Client Example
+
+```python
+import requests
+import json
+
+def chat_with_streaming(message, session_id, debug=False):
+    """Send a chat message and process streaming response."""
+    url = "http://localhost:8000/chat"
+    payload = {
+        "message": message,
+        "session_id": session_id,
+        "debug": debug
+    }
+
+    response = requests.post(url, json=payload, stream=True)
+
+    full_content = ""
+    for line in response.iter_lines():
+        if line:
+            line_text = line.decode('utf-8')
+            if line_text.startswith('data: '):
+                chunk_data = line_text[6:]  # Remove 'data: ' prefix
+                if chunk_data == '[DONE]':
+                    break
+                try:
+                    chunk = json.loads(chunk_data)
+                    if chunk['choices'][0]['delta'].get('content'):
+                        content = chunk['choices'][0]['delta']['content']
+                        print(content, end='', flush=True)
+                        full_content += content
+                except json.JSONDecodeError:
+                    pass
+
+    return full_content
+
+# Usage example
+response = chat_with_streaming(
+    message="What laptops do you recommend for programming?",
+    session_id="dev-session-456",
+    debug=True
+)
+```
+
+#### Get Session Statistics
+
+```bash
+curl -X GET "http://localhost:8000/chat/sessions/user-session-123/stats"
+```
+
+#### Get Chat System Statistics
+
+```bash
+curl -X GET "http://localhost:8000/chat/stats"
+```
+
 ### Ingest Documents
 
 ```bash
-# Ingest markdown documents
+# Ingest documents from directory
 curl -X POST "http://localhost:8000/ingest/documents" \
   -H "Content-Type: application/json" \
   -d '{
-    "file_paths": ["./data/products/iphone_16_pro.md"],
+    "source_path": "./data/products",
+    "chunk_size": 300,
+    "chunk_overlap": 50,
+    "rebuild_index": false
+  }'
+
+# Ingest single file
+curl -X POST "http://localhost:8000/ingest/documents" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source_path": "./data/products/iphone_16_pro.md",
     "chunk_size": 300,
     "chunk_overlap": 50
   }'
 ```
 
-### Retrieve Information
+### Retrieve Knowledge
 
 #### Hybrid Search (Recommended)
 
 ```bash
-curl -X POST "http://localhost:8000/inference/chat" \
+curl -X POST "http://localhost:8000/inference/tools/retrieve" \
   -H "Content-Type: application/json" \
   -d '{
     "query": "iPhone 16 Pro features",
-    "search_mode": "hybrid"
+    "search_mode": "hybrid",
+    "top_k": 5,
+    "similarity_threshold": 0.15,
+    "include_scores": true
   }'
 ```
 
 #### Semantic Search
 
 ```bash
-curl -X POST "http://localhost:8000/inference/chat" \
+curl -X POST "http://localhost:8000/inference/tools/retrieve" \
   -H "Content-Type: application/json" \
   -d '{
     "query": "laptops for creative work",
-    "search_mode": "semantic"
+    "search_mode": "semantic",
+    "top_k": 5,
+    "include_scores": true
   }'
 ```
 
 #### Keyword Search
 
 ```bash
-curl -X POST "http://localhost:8000/inference/chat" \
+curl -X POST "http://localhost:8000/inference/tools/retrieve" \
   -H "Content-Type: application/json" \
   -d '{
     "query": "student discount eligibility",
-    "search_mode": "keyword"
+    "search_mode": "keyword",
+    "top_k": 5,
+    "include_scores": true
   }'
 ```
 
-### Chat
+### Product Search
 
 ```bash
-curl -X POST "http://localhost:8000/inference/chat" \
+curl -X POST "http://localhost:8000/inference/tools/search_product" \
   -H "Content-Type: application/json" \
   -d '{
-    "query": "What phones do you have under $800?",
-    "search_mode": "hybrid",
-    "user_context": {
-      "name": "Alex",
-      "age_group": "25-35",
-      "region": "US"
-    }
+    "query": "iPhone",
+    "category": "smartphones",
+    "max_price": 1000,
+    "brand": "Apple",
+    "limit": 10,
+    "sort_by": "relevance"
   }'
+```
+
+### Guardrail Classification
+
+```bash
+# Classify single text
+curl -X POST "http://localhost:8000/guardrail/classify" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "What iPhone models do you have available?"
+  }'
+
 ```
 
 ## Performance Metrics
 
 ### Latency Performance (October 2025)
 
-| Query Type     | Tool Calls Used       | TTFT (ms) | Total Time (s) | Status        |
-| -------------- | --------------------- | --------- | -------------- | ------------- |
-| Product Search | search_products       | 1,165     | 11.75          | Fast          |
-| Feature Query  | retrieve_knowledge    | 1,201     | 14.96          | Good          |
-| Brand Search   | search_products (×3) | 1,907     | 27.69          | Acceptable    |
-| Context Query  | None                  | 14,383    | 15.54          | Needs Context |
+| Query Type     | Tool Calls Used       | TTFT (ms) | Total Time (s) | Status     |
+| -------------- | --------------------- | --------- | -------------- | ---------- |
+| Product Search | search_products       | 1,165     | 11.75          | Fast       |
+| Feature Query  | retrieve_knowledge    | 1,201     | 14.96          | Good       |
+| Brand Search   | search_products (×3) | 1,907     | 27.69          | Acceptable |
 
 | Component                | Expected Latency | Actual Latency | Status      |
 | ------------------------ | ---------------- | -------------- | ----------- |
@@ -217,13 +331,20 @@ Once the server is running, visit:
 
 ### Key Endpoints
 
-| Endpoint            | Method | Description           |
-| ------------------- | ------ | --------------------- |
-| /inference/chat     | POST   | Main chat endpoint    |
-| /ingest/documents   | POST   | Ingest documents      |
-| /guardrail/classify | POST   | Classify text content |
-| /health             | GET    | Health check          |
-| /stats              | GET    | System statistics     |
+| Endpoint                          | Method | Description                            |
+| --------------------------------- | ------ | -------------------------------------- |
+| /chat                             | POST   | Multi-turn chat with streaming         |
+| /chat/sessions/{session_id}/stats | GET    | Get chat session statistics            |
+| /chat/stats                       | GET    | Get chat system statistics             |
+| /ingest/documents                 | POST   | Ingest documents into unified index    |
+| /ingest/status                    | GET    | Get current ingestion status and stats |
+| /guardrail/classify               | POST   | Classify text for safety               |
+| /guardrail/labels                 | GET    | Get available guardrail labels         |
+| /inference/tools                  | GET    | Get available tools and information    |
+| /inference/tools/retrieve         | POST   | Retrieve documents with hybrid search  |
+| /inference/tools/search_product   | POST   | Search product inventory (mock API)    |
+| /inference/models                 | GET    | Get model information                  |
+| /inference/health                 | GET    | Health check for inference             |
 
 ## Testing
 
@@ -319,7 +440,7 @@ python scripts/run_server.py
 curl -X POST "http://localhost:8000/ingest/documents" \
   -H "Content-Type: application/json" \
   -d '{
-    "file_paths": ["./data/products/*"],
+    "source_path": "./data/products",
     "chunk_size": 300,
     "chunk_overlap": 50
   }'
@@ -328,13 +449,17 @@ curl -X POST "http://localhost:8000/ingest/documents" \
 3. **Test the system**
 
 ```bash
-curl -X POST "http://localhost:8000/inference/chat" \
+# Test the new chat interface
+curl -X POST "http://localhost:8000/chat" \
   -H "Content-Type: application/json" \
   -d '{
-    "query": "What iPhones do you have available?",
-    "search_mode": "hybrid"
+    "message": "What iPhones do you have available?",
+    "session_id": "test-session-123",
+    "debug": true
   }'
 ```
+
+This will return a streaming response with tool calling, debug information, and iPhone recommendations.
 
 ## Guardrails
 
