@@ -48,9 +48,6 @@ class Settings(BaseSettings):
         description="Default LLM validation configuration"
     )
 
-
-
-
     embedding_model: str = Field(
         default="google/embeddinggemma-300m",
         description="Embedding model for semantic search"
@@ -190,6 +187,20 @@ class Settings(BaseSettings):
     prompts_dir: Path = Field(
         default=Path("./prompts"),
         description="Prompts directory path"
+    )
+
+    # Shopify configurations
+    shopify_store_domain: str = Field(
+        default="curator-pommeline.myshopify.com",
+        description="Shopify store domain"
+    )
+    shopify_api_key: str = Field(
+        default="",
+        description="Shopify Storefront API access token"
+    )
+    shopify_api_version: str = Field(
+        default="2025-07",
+        description="Shopify API version"
     )
 
     class Config:

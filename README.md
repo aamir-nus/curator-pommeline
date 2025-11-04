@@ -43,6 +43,10 @@ flowchart LR
     style K fill:#f8d7da
 ```
 
+## LLD (Low-Level Design)
+
+![1762268450277](image/README/1762268450277.png)
+
 ## Installation
 
 ### Prerequisites
@@ -415,6 +419,32 @@ jupyter notebook notebooks/04_end_to_end_demo.ipynb
 
 ## Quick Start
 
+### Option 1: Automated Startup (Recommended)
+
+Use the provided startup script for automated server management:
+
+```bash
+# Start everything with one command
+./start_chatbot.sh
+```
+
+The startup script will:
+
+- ✅ Stop any existing server on port 8000
+- ✅ Activate the virtual environment automatically
+- ✅ Start the server with proper logging
+- ✅ Warm up all endpoints (retrieval, guardrails, chat, search tools)
+- ✅ Open the browser with the chat interface
+- ✅ Provide server status and management information
+
+**To stop the server:**
+
+```bash
+./stop_chatbot.sh  # Created automatically by the startup script
+```
+
+### Option 2: Manual Startup
+
 1. **Start services**
 
 ```bash
@@ -429,6 +459,9 @@ docker run -d \
   -p 5081:5081 \
   --platform linux/amd64 \
   ghcr.io/pinecone-io/pinecone-index:latest
+
+# Activate virtual environment
+source .venv/bin/activate
 
 # Start the API server
 python scripts/run_server.py

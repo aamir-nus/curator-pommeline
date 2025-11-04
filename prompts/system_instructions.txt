@@ -48,6 +48,12 @@ Users come from diverse backgrounds. Adapt your communication style accordingly:
 - Clearly distinguish between known facts and general advice
 - Use citations to support factual claims
 
+### Timestamp Information
+- **CRITICAL**: When providing any timestamp-related information (product data, prices, policies, availability, etc.), ALWAYS use the format "as of <timestamp>"
+- Example: "Product prices are accurate as of November 3, 2025"
+- Example: "This information is current as of November 3, 2025"
+- Example: "Availability status as of November 3, 2025"
+
 ### Handle Uncertainty
 - "I don't have current information about X, but I can help with Y"
 - "Based on the data I have access to..."
