@@ -3,11 +3,14 @@ Product search tool with Shopify API integration and hot-cold caching strategy.
 """
 import aiohttp
 import asyncio
-import json
-import time
 import hashlib
-from typing import List, Dict, Any, Optional
+import json
+import random
+import time
+
+from pathlib import Path
 from pydantic import BaseModel, Field
+from typing import List, Dict, Any, Optional
 
 from ..utils.logger import get_logger
 from ..utils.metrics import track_latency, metrics
@@ -312,59 +315,33 @@ class ShopifyProductAPI:
 
     def _get_mock_products(self, query: str, limit: int) -> List[Product]:
         """Generate mock products for demonstration when API is unavailable."""
-        import random
 
         query_lower = query.lower()
         mock_products = []
 
-        # iPhone products
-        if "iphone" in query_lower:
-            mock_products = [
-                {
-                    "id": "mock_iphone_15_pro",
-                    "name": "iPhone 15 Pro",
-                    "description": "Latest iPhone with A17 Pro chip, titanium design, and advanced camera system",
-                    "price": 999.99,
-                    "original_price": 1199.99,
-                    "brand": "Apple",
-                    "category": "Smartphones",
-                    "image_url": "https://cdn.shopify.com/s/files/1/0533/2089/files/placeholder-images-product-1_large.png",
-                    "product_url": f"https://{self.store_domain}/products/iphone-15-pro"
-                },
-                {
-                    "id": "mock_iphone_15",
-                    "name": "iPhone 15",
-                    "description": "Latest iPhone with Dynamic Island and advanced camera system",
-                    "price": 799.99,
-                    "original_price": 899.99,
-                    "brand": "Apple",
-                    "category": "Smartphones",
-                    "image_url": "https://cdn.shopify.com/s/files/1/0533/2089/files/placeholder-images-product-2_large.png",
-                    "product_url": f"https://{self.store_domain}/products/iphone-15"
-                }
-            ]
+        # Load mock products from JSON file
+        try:
+            mock_file_path = Path(__file__).parent / "mock_products.json"
+            with open(mock_file_path, 'r') as f:
+                mock_data = json.load(f)
+                all_products = mock_data.get("products", [])
+        except Exception as e:
+            logger.error(f"Error loading mock products JSON: {e}")
+            return []
 
-        # Laptop products
-        elif "laptop" in query_lower:
-            mock_products = [
-                {
-                    "id": "mock_macbook_air",
-                    "name": "MacBook Air M3",
-                    "description": "Ultra-thin laptop with M3 chip, all-day battery, and brilliant display",
-                    "price": 1099.99,
-                    "original_price": 1299.99,
-                    "brand": "Apple",
-                    "category": "Laptops",
-                    "image_url": "https://cdn.shopify.com/s/files/1/0533/2089/files/placeholder-images-product-3_large.png",
-                    "product_url": f"https://{self.store_domain}/products/macbook-air-m3"
-                }
-            ]
+        # Filter products based on keywords
+        for product_data in all_products:
+            keywords = [kw.lower() for kw in product_data.get("keywords", [])]
 
-        # Generic products
-        else:
+            # Check if any keyword matches the query
+            if any(keyword in query_lower for keyword in keywords):
+                mock_products.append(product_data)
+
+        # If no keyword matches, add a generic product
+        if not mock_products:
             mock_products = [
                 {
-                    "id": "mock_product_1",
+                    "id": "mock_generic_product",
                     "name": f"Product matching '{query}'",
                     "description": f"High-quality product that matches your search for {query}",
                     "price": 99.99,
