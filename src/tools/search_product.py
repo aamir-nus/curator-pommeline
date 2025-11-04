@@ -141,11 +141,9 @@ class ShopifyProductAPI:
     """
 
     def __init__(self):
-        # self.store_domain = settings.shopify_store_domain
-        # self.access_token = settings.shopify_api_key
+        self.store_domain = settings.shopify_store_domain
+        self.access_token = settings.shopify_api_key
         # self.api_version = settings.shopify_api_version
-        self.store_domain = "curator-pommeline.myshopify.com"
-        self.access_token = "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"
         self.api_version = "2024-01"
 
         self.graphql_endpoint = f"https://{self.store_domain}/api/{self.api_version}/graphql.json"
