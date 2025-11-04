@@ -43,6 +43,10 @@ flowchart LR
     style K fill:#f8d7da
 ```
 
+## LLD (Low-Level Design)
+
+![1762268450277](image/README/1762268450277.png)
+
 ## Installation
 
 ### Prerequisites
@@ -425,6 +429,7 @@ Use the provided startup script for automated server management:
 ```
 
 The startup script will:
+
 - ✅ Stop any existing server on port 8000
 - ✅ Activate the virtual environment automatically
 - ✅ Start the server with proper logging
@@ -433,6 +438,7 @@ The startup script will:
 - ✅ Provide server status and management information
 
 **To stop the server:**
+
 ```bash
 ./stop_chatbot.sh  # Created automatically by the startup script
 ```
