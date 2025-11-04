@@ -143,8 +143,7 @@ class ShopifyProductAPI:
     def __init__(self):
         self.store_domain = settings.shopify_store_domain
         self.access_token = settings.shopify_api_key
-        # self.api_version = settings.shopify_api_version
-        self.api_version = "2024-01"
+        self.api_version = settings.shopify_api_version
 
         self.graphql_endpoint = f"https://{self.store_domain}/api/{self.api_version}/graphql.json"
 
